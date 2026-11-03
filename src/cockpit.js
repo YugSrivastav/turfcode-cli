@@ -20,6 +20,9 @@ import { FileTree } from './file-tree.js';
 import { AudioBell } from './bell.js';
 import { selfHeal, recordSessionStart, recordSessionExit } from './self-heal.js';
 
+// Disable Blessed mouse modes at process level before any widget/screen instantiation [MD-043], [MD-044]
+process.env.BLESSED_FORCE_MODES = 'ALLMOTION=0,CELLMOTION=0,UTFMOUSE=0,X10MOUSE=0,SGRMOUSE=0,VT200MOUSE=0,SENDFOCUS=0';
+
 export function createCockpit(options = {}) {
   const {
     mode = 'host',
@@ -107,9 +110,10 @@ export function createCockpit(options = {}) {
   const screen = blessed.screen({
     smartCSR: true,
     title: `TurfCode Cockpit [${roomCode}]`,
-    dockBorders: true,
+    dockBorders: false,
     useBCE: true,
     fullUnicode: true,
+    mouse: false,
     style: {
       bg: PALETTE.bg,
       fg: PALETTE.textBright
@@ -117,42 +121,57 @@ export function createCockpit(options = {}) {
     ...screenOptions
   });
 
-  // Disable allMotion / any-event mouse motion tracking (1003) [MD-043].
-  // Blessed enables 1003 by default which causes xterm / Windows Terminal to flood stdin
-  // with raw mouse movement coordinates (e.g. "CF,CF-CF..."), leaking into the input box.
+  // Permanently neuter terminal mouse tracking [MD-043], [MD-044]
+  // In terminal emulators (like Windows Terminal), mouse mode 1003/1005 floods stdin with
+  // raw coordinates (e.g. ¤77CC¥¥77CC... and CF,CF-CF...). We explicitly tell the terminal
+  // to disable all mouse tracking modes and neuter Blessed's enableMouse methods.
   if (screen.program) {
-    screen.program.enableMouse = function() {
-      return this.setMouse({
-        vt200Mouse: true,
-        sgrMouse: true,
-        allMotion: false,
-        cellMotion: false
-      }, true);
-    };
+    screen.program.enableMouse = function() {};
+    screen.program.disableMouse = function() {};
+    screen.program.setMouse = function() {};
     try {
-      screen.program.setMouse({
-        allMotion: false,
-        cellMotion: false
-      });
-      screen.program._twrite('\x1b[?1003l\x1b[?1002l');
+      screen.program._twrite('\x1b[?1006l\x1b[?1016l\x1b[?1015l\x1b[?1005l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?9l');
     } catch {}
   }
+  screen.enableMouse = function() {};
 
-  // 2. Top Header Bar (Herdr-style unified status strip)
+  // Retain header and footer objects for API and test compatibility
   const header = blessed.box({
     parent: screen,
-    ...BLESSED_STYLES.header,
-    content: ` {bold}{#39ff14-fg}TURFCODE{/#39ff14-fg}{/bold}  {#eab308-fg}${roomCode}{/#eab308-fg}  {#4a7c4a-fg}•{/#4a7c4a-fg}  {#f0fff0-fg}${mode.toUpperCase()}{/#f0fff0-fg}  {#4a7c4a-fg}•{/#4a7c4a-fg}  {#06b6d4-fg}${userName}{/#06b6d4-fg}  {#4a7c4a-fg}•{/#4a7c4a-fg}  {#4a7c4a-fg}${displayDir}{/#4a7c4a-fg}`
+    top: 0,
+    left: 0,
+    width: '100%',
+    height: 0,
+    hidden: true,
+    tags: true,
+    content: ''
   });
 
-  // 3. Left Sidebar (Herdr-style unified column)
+  const footer = blessed.box({
+    parent: screen,
+    bottom: 0,
+    left: 0,
+    width: '100%',
+    height: 0,
+    hidden: true,
+    tags: true,
+    content: ''
+  });
+
+  // 3. Left Sidebar (Herdr-style clean borderless column with single right vertical divider)
   const sidebar = blessed.box({
     parent: screen,
-    top: 1,
+    top: 0,
     left: 0,
     width: '30%',
-    height: '100%-2',
-    border: { type: 'line', fg: PALETTE.mutedBorder },
+    height: '100%',
+    border: {
+      type: 'line',
+      top: false,
+      bottom: false,
+      left: false,
+      right: true
+    },
     style: {
       bg: PALETTE.bg,
       border: { fg: PALETTE.mutedBorder }
@@ -167,6 +186,7 @@ export function createCockpit(options = {}) {
     width: '100%-2',
     height: 3,
     tags: true,
+    mouse: false,
     style: {
       fg: PALETTE.textBright,
       bg: PALETTE.bg
@@ -174,9 +194,21 @@ export function createCockpit(options = {}) {
   });
 
   function renderSpaces() {
-    spacesBox.setContent(`{bold}{#4a7c4a-fg}SPACES{/#4a7c4a-fg}{/bold}\n {#39ff14-fg}○{/#39ff14-fg} {#f0fff0-fg}${displayDir}{/#f0fff0-fg}\n   {#4a7c4a-fg}main  clean{/#4a7c4a-fg}`);
+    spacesBox.setContent(`{bold}{#4a7c4a-fg}spaces{/#4a7c4a-fg}{/bold}\n {#39ff14-fg}●{/#39ff14-fg} {#f0fff0-fg}${displayDir}{/#f0fff0-fg}\n   {#4a7c4a-fg}main  clean{/#4a7c4a-fg}`);
   }
   renderSpaces();
+
+  // Subtle section divider 1 (spaces -> tasks)
+  const spacesDivider = blessed.box({
+    parent: sidebar,
+    top: 3,
+    left: 1,
+    width: '100%-2',
+    height: 1,
+    tags: true,
+    content: `{#1b3b1b-fg}${'─'.repeat(40)}{/#1b3b1b-fg}`,
+    style: { bg: PALETTE.bg }
+  });
 
   // 3a. Tasks Container (MD-037 4-field schema, Herdr-style borderless section)
   const tasksBox = blessed.box({
@@ -188,7 +220,7 @@ export function createCockpit(options = {}) {
     tags: true,
     scrollable: true,
     alwaysScroll: true,
-    mouse: true,
+    mouse: false,
     keys: true,
     vi: true,
     style: {
@@ -200,7 +232,7 @@ export function createCockpit(options = {}) {
   function renderTasks() {
     const currentTasks = intentBoard.getTasks();
     const currentLocks = lockManager.getLocks();
-    const headerLine = `{bold}{#4a7c4a-fg}INTENTS & TASKS{/#4a7c4a-fg}{/bold}`;
+    const headerLine = `{bold}{#4a7c4a-fg}intents & tasks{/#4a7c4a-fg}{/bold}`;
     if (!currentTasks || currentTasks.length === 0) {
       tasksBox.setContent(`${headerLine}\n ${TAGS.dim('(No tasks in intent queue)')}`);
       return;
@@ -209,16 +241,28 @@ export function createCockpit(options = {}) {
     tasksBox.setContent(`${headerLine}\n${lines.join('\n\n')}`);
   }
 
+  // Subtle section divider 2 (tasks -> locks)
+  const tasksDivider = blessed.box({
+    parent: sidebar,
+    top: '48%',
+    left: 1,
+    width: '100%-2',
+    height: 1,
+    tags: true,
+    content: `{#1b3b1b-fg}${'─'.repeat(40)}{/#1b3b1b-fg}`,
+    style: { bg: PALETTE.bg }
+  });
+
   // 3b. File Lock Table (MD-002, MD-040, Herdr-style borderless section)
   const locksBox = blessed.box({
     parent: sidebar,
-    top: '48%',
+    top: '49%',
     left: 1,
     width: '100%-2',
     height: '24%',
     tags: true,
     scrollable: true,
-    mouse: true,
+    mouse: false,
     style: {
       fg: PALETTE.textBright,
       bg: PALETTE.bg
@@ -227,7 +271,7 @@ export function createCockpit(options = {}) {
 
   function renderLocks() {
     const currentLocks = lockManager.getLocks();
-    const headerLine = `{bold}{#4a7c4a-fg}ACTIVE FILE LOCKS{/#4a7c4a-fg}{/bold}`;
+    const headerLine = `{bold}{#4a7c4a-fg}active locks{/#4a7c4a-fg}{/bold}`;
     if (!currentLocks || currentLocks.length === 0) {
       locksBox.setContent(`${headerLine}\n ${TAGS.dim('(No active file locks - workspace free)')}`);
       return;
@@ -240,6 +284,48 @@ export function createCockpit(options = {}) {
     locksBox.setContent(`${headerLine}\n${lines.join('\n')}`);
   }
 
+  // Subtle section divider 3 (locks -> peers)
+  const locksDivider = blessed.box({
+    parent: sidebar,
+    top: '74%',
+    left: 1,
+    width: '100%-2',
+    height: 1,
+    tags: true,
+    content: `{#1b3b1b-fg}${'─'.repeat(40)}{/#1b3b1b-fg}`,
+    style: { bg: PALETTE.bg }
+  });
+
+  // 3c. Connected Peers Container (Herdr-style borderless section)
+  const peersBox = blessed.box({
+    parent: sidebar,
+    top: '75%',
+    left: 1,
+    width: '100%-2',
+    height: '100%-75%-2',
+    tags: true,
+    scrollable: true,
+    mouse: false,
+    style: {
+      fg: PALETTE.textBright,
+      bg: PALETTE.bg
+    }
+  });
+
+  function renderPeers() {
+    const headerLine = `{bold}{#4a7c4a-fg}peers{/#4a7c4a-fg}{/bold}`;
+    if (!peers || peers.length === 0) {
+      peersBox.setContent(`${headerLine}\n ${TAGS.dim('(Solo session)')}`);
+      return;
+    }
+    const lines = peers.map(p => {
+      const dot = TAGS.lime('●');
+      const selfLabel = p.isSelf ? ` ${TAGS.limeBold('(You)')}` : '';
+      return ` ${dot} {#f0fff0-fg}${p.name}{/#f0fff0-fg}${selfLabel} ${TAGS.cyan(`[${p.role}]`)}`;
+    });
+    peersBox.setContent(`${headerLine}\n${lines.join('\n')}`);
+  }
+
   // 3b-alt. Interactive File Tree with Padlock Badges [MD-027]
   const fileTreeBox = blessed.box({
     parent: sidebar,
@@ -250,7 +336,7 @@ export function createCockpit(options = {}) {
     tags: true,
     scrollable: true,
     alwaysScroll: true,
-    mouse: true,
+    mouse: false,
     keys: true,
     vi: true,
     hidden: true,
@@ -268,8 +354,11 @@ export function createCockpit(options = {}) {
     isFileTreeVisible = !isFileTreeVisible;
     if (isFileTreeVisible) {
       spacesBox.hide();
+      spacesDivider.hide();
       tasksBox.hide();
+      tasksDivider.hide();
       locksBox.hide();
+      locksDivider.hide();
       peersBox.hide();
       fileTreeBox.show();
       renderFileTree();
@@ -279,8 +368,11 @@ export function createCockpit(options = {}) {
     } else {
       fileTreeBox.hide();
       spacesBox.show();
+      spacesDivider.show();
       tasksBox.show();
+      tasksDivider.show();
       locksBox.show();
+      locksDivider.show();
       peersBox.show();
       renderTasks();
       renderLocks();
@@ -311,36 +403,6 @@ export function createCockpit(options = {}) {
     }
     screen.render();
   });
-
-  // 3c. Connected Peers Container (Herdr-style borderless section)
-  const peersBox = blessed.box({
-    parent: sidebar,
-    top: '74%',
-    left: 1,
-    width: '100%-2',
-    height: '100%-74%-2',
-    tags: true,
-    scrollable: true,
-    mouse: true,
-    style: {
-      fg: PALETTE.textBright,
-      bg: PALETTE.bg
-    }
-  });
-
-  function renderPeers() {
-    const headerLine = `{bold}{#4a7c4a-fg}CONNECTED PEERS{/#4a7c4a-fg}{/bold}`;
-    if (!peers || peers.length === 0) {
-      peersBox.setContent(`${headerLine}\n ${TAGS.dim('(Solo session)')}`);
-      return;
-    }
-    const lines = peers.map(p => {
-      const dot = TAGS.lime('●');
-      const selfLabel = p.isSelf ? ` ${TAGS.limeBold('(You)')}` : '';
-      return ` ${dot} {#f0fff0-fg}${p.name}{/#f0fff0-fg}${selfLabel} ${TAGS.cyan(`[${p.role}]`)}`;
-    });
-    peersBox.setContent(`${headerLine}\n${lines.join('\n')}`);
-  }
 
   // Wire TunnelServer events (Host mode)
   if (tunnelServer) {
@@ -400,9 +462,9 @@ export function createCockpit(options = {}) {
     left: 1,
     width: '100%-2',
     height: 1,
-    content: `{#4a7c4a-fg}« Collapse Sidebar [Ctrl+B]{/#4a7c4a-fg}`,
+    content: `{#2d4d2d-fg}« collapse [Ctrl+B]{/#2d4d2d-fg}`,
     tags: true,
-    mouse: true,
+    mouse: false,
     style: {
       fg: PALETTE.textMuted,
       bg: PALETTE.bg,
@@ -410,14 +472,20 @@ export function createCockpit(options = {}) {
     }
   });
 
-  // 4. Right Container (70% Terminal & Agent Pane)
+  // 4. Right Container (Herdr-style borderless terminal multiplexer)
   const terminalPane = blessed.box({
     parent: screen,
-    top: 1,
+    top: 0,
     left: '30%',
     width: '70%',
-    height: '100%-2',
-    border: { type: 'line', fg: PALETTE.mutedBorder },
+    height: '100%',
+    border: {
+      type: 'line',
+      top: false,
+      bottom: false,
+      left: false,
+      right: false
+    },
     tags: true,
     style: {
       fg: PALETTE.textBright,
@@ -426,15 +494,29 @@ export function createCockpit(options = {}) {
     }
   });
 
-  // 4a. Tab Bar (Herdr-style pill tab row)
+  // 4a. Tab Bar (Herdr-style pill tab row with right-aligned session metadata)
   const tabBar = blessed.box({
     parent: terminalPane,
     top: 0,
     left: 0,
-    width: '100%-2',
+    width: '100%',
     height: 1,
     tags: true,
-    mouse: true,
+    mouse: false,
+    style: {
+      fg: PALETTE.textMuted,
+      bg: PALETTE.bg
+    }
+  });
+
+  const tabStatus = blessed.box({
+    parent: terminalPane,
+    top: 0,
+    right: 1,
+    height: 1,
+    shrink: true,
+    tags: true,
+    mouse: false,
     style: {
       fg: PALETTE.textMuted,
       bg: PALETTE.bg
@@ -458,14 +540,14 @@ export function createCockpit(options = {}) {
       parent: terminalPane,
       top: 1,
       left: 0,
-      width: '100%-2',
+      width: '100%',
       height: '100%-3',
       scrollable: true,
       alwaysScroll: true,
       tags: true,
       keys: true,
       vi: true,
-      mouse: true,
+      mouse: false,
       hidden: index !== 0,
       style: {
         fg: PALETTE.textBright,
@@ -485,6 +567,7 @@ export function createCockpit(options = {}) {
     });
     tabParts.push(`{#2a5a2a-fg} + {/#2a5a2a-fg}`);
     tabBar.setContent(` ${tabParts.join(' ')}`);
+    tabStatus.setContent(`{#39ff14-fg}●{/#39ff14-fg} {#eab308-fg}${roomCode}{/#eab308-fg}  {#4a7c4a-fg}•{/#4a7c4a-fg}  {#f0fff0-fg}${mode.toUpperCase()}{/#f0fff0-fg}  {#4a7c4a-fg}•{/#4a7c4a-fg}  {#06b6d4-fg}${userName}{/#06b6d4-fg} `);
   }
 
   function printWelcomeBanner(log) {
@@ -510,14 +593,14 @@ export function createCockpit(options = {}) {
         parent: terminalPane,
         top: 1,
         left: 0,
-        width: '100%-2',
+        width: '100%',
         height: '100%-3',
         scrollable: true,
         alwaysScroll: true,
         tags: true,
         keys: true,
         vi: true,
-        mouse: true,
+        mouse: false,
         hidden: true,
         style: {
           fg: PALETTE.textBright,
@@ -582,14 +665,14 @@ export function createCockpit(options = {}) {
       parent: terminalPane,
       top: 1,
       left: 0,
-      width: '100%-2',
+      width: '100%',
       height: '100%-3',
       scrollable: true,
       alwaysScroll: true,
       tags: true,
       keys: true,
       vi: true,
-      mouse: true,
+      mouse: false,
       hidden: true,
       style: {
         fg: PALETTE.textBright,
@@ -666,15 +749,29 @@ export function createCockpit(options = {}) {
     }
   });
 
-  // 4b. Command / Prompt Input Box (Herdr-style minimal prompt line)
+  // 4b. Subtle horizontal divider rule above input prompt (Herdr style)
+  const promptDivider = blessed.box({
+    parent: terminalPane,
+    bottom: 1,
+    left: 0,
+    width: '100%',
+    height: 1,
+    tags: true,
+    content: `{#1b3b1b-fg}${'─'.repeat(300)}{/#1b3b1b-fg}`,
+    style: {
+      bg: PALETTE.bg
+    }
+  });
+
+  // 4c. Command / Prompt Input Box (Herdr-style unified bottom prompt line)
   const inputContainer = blessed.box({
     parent: terminalPane,
     bottom: 0,
     left: 0,
-    width: '100%-2',
+    width: '100%',
     height: 1,
     tags: true,
-    mouse: true,
+    mouse: false,
     style: {
       fg: PALETTE.textBright,
       bg: PALETTE.bg
@@ -693,7 +790,7 @@ export function createCockpit(options = {}) {
     parent: inputContainer,
     top: 0,
     left: 8,
-    width: '100%-10',
+    width: '100%-48',
     height: 1,
     keys: true,
     mouse: false,
@@ -704,7 +801,15 @@ export function createCockpit(options = {}) {
     }
   });
 
-  // Defense-in-depth: sanitize input against stray mouse tracking / escape artifacts [MD-043]
+  const inputShortcuts = blessed.text({
+    parent: inputContainer,
+    top: 0,
+    right: 1,
+    tags: true,
+    content: `{#4a7c4a-fg}[Tab]{/#4a7c4a-fg} {#2d4d2d-fg}Focus{/#2d4d2d-fg}  {#4a7c4a-fg}[D]{/#4a7c4a-fg} {#2d4d2d-fg}Diff{/#2d4d2d-fg}  {#4a7c4a-fg}[F]{/#4a7c4a-fg} {#2d4d2d-fg}Files{/#2d4d2d-fg}  {#4a7c4a-fg}[Ctrl+B]{/#4a7c4a-fg} {#2d4d2d-fg}Sidebar{/#2d4d2d-fg}`
+  });
+
+  // Defense-in-depth: sanitize input against stray mouse tracking / escape artifacts [MD-043], [MD-044]
   const origTextboxListener = inputBox._listener;
   inputBox._listener = function(ch, key) {
     if (key && (key.name === 'mouse' || key.type === 'X10' || key.type === 'SGR' || key.name === 'undefined')) {
@@ -713,15 +818,12 @@ export function createCockpit(options = {}) {
     if (ch && (ch.startsWith('\x1b') || ch === '\x1b')) {
       return;
     }
+    // Drop UTF/X10 mouse coordinates (>127 Latin1 range: ¤, ¥, ¦, §, etc.)
+    if (ch && /^[\u0080-\u00FF]/.test(ch)) {
+      return;
+    }
     return origTextboxListener.call(this, ch, key);
   };
-
-  // 5. Bottom Footer Bar (Clean, understated keybinding reference)
-  const footer = blessed.box({
-    parent: screen,
-    ...BLESSED_STYLES.footer,
-    content: ` {#39ff14-fg}[Tab]{/#39ff14-fg} {#4a7c4a-fg}Focus{/#4a7c4a-fg}   {#39ff14-fg}[D]{/#39ff14-fg} {#4a7c4a-fg}Diff{/#4a7c4a-fg}   {#39ff14-fg}[F]{/#39ff14-fg} {#4a7c4a-fg}Files{/#4a7c4a-fg}   {#39ff14-fg}[Ctrl+B]{/#39ff14-fg} {#4a7c4a-fg}Sidebar{/#4a7c4a-fg}   {#39ff14-fg}[Ctrl+1..9]{/#39ff14-fg} {#4a7c4a-fg}Tabs{/#4a7c4a-fg}`
-  });
 
   // Helper: Get Active Tab & Log
   function getActiveTab() {
@@ -737,7 +839,9 @@ export function createCockpit(options = {}) {
     focusIndex = (idx + 3) % 3;
 
     sidebar.style.border.fg = PALETTE.mutedBorder;
-    terminalPane.style.border.fg = PALETTE.mutedBorder;
+    if (terminalPane.style.border) {
+      terminalPane.style.border.fg = PALETTE.mutedBorder;
+    }
 
     if (focusIndex === 0) {
       sidebar.style.border.fg = PALETTE.activeBorder;
@@ -747,10 +851,14 @@ export function createCockpit(options = {}) {
         tasksBox.focus();
       }
     } else if (focusIndex === 1) {
-      terminalPane.style.border.fg = PALETTE.activeBorder;
+      if (terminalPane.style.border) {
+        terminalPane.style.border.fg = PALETTE.activeBorder;
+      }
       getActiveLog().focus();
     } else {
-      terminalPane.style.border.fg = PALETTE.activeBorder;
+      if (terminalPane.style.border) {
+        terminalPane.style.border.fg = PALETTE.activeBorder;
+      }
       inputBox.focus();
       if (!inputBox._reading) {
         inputBox.readInput();
@@ -770,12 +878,15 @@ export function createCockpit(options = {}) {
     if (isSidebarCollapsed) {
       sidebar.width = 4;
       spacesBox.hide();
+      spacesDivider.hide();
       tasksBox.hide();
+      tasksDivider.hide();
       locksBox.hide();
+      locksDivider.hide();
       fileTreeBox.hide();
       peersBox.hide();
       collapseBtn.top = 0;
-      collapseBtn.height = '100%-2';
+      collapseBtn.height = '100%';
       collapseBtn.setContent(' »');
       terminalPane.left = 4;
       terminalPane.width = '100%-4';
@@ -784,19 +895,25 @@ export function createCockpit(options = {}) {
       if (isFileTreeVisible) {
         fileTreeBox.show();
         spacesBox.hide();
+        spacesDivider.hide();
         tasksBox.hide();
+        tasksDivider.hide();
         locksBox.hide();
+        locksDivider.hide();
       } else {
         fileTreeBox.hide();
         spacesBox.show();
+        spacesDivider.show();
         tasksBox.show();
+        tasksDivider.show();
         locksBox.show();
+        locksDivider.show();
       }
       peersBox.show();
       collapseBtn.top = undefined;
       collapseBtn.bottom = 0;
       collapseBtn.height = 1;
-      collapseBtn.setContent(`{#4a7c4a-fg}« Collapse Sidebar [Ctrl+B]{/#4a7c4a-fg}`);
+      collapseBtn.setContent(`{#2d4d2d-fg}« collapse [Ctrl+B]{/#2d4d2d-fg}`);
       terminalPane.left = '30%';
       terminalPane.width = '70%';
     }

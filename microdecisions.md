@@ -363,3 +363,25 @@ All crewmates, contributors, and agents MUST adhere to these invariants when mod
   4. Sent clean mouse mode reset (`\x1b[?1003l\x1b[?1002l\x1b[?1000l`) on cockpit teardown.
 - **Reason:** In terminals supporting 24-bit TrueColor and SGR/X10 mouse reporting, any-event tracking (`1003`) produces thousands of coordinate packets per second. When packets arrive in chunks, the parser strips the escape header of the first packet, leaving trailing coordinate bytes in stdin where they get misinterpreted as keyboard strokes. Disabling movement tracking eliminates the issue at the hardware escape protocol level.
 - **Worker Invariant:** `allMotion` must never be enabled in cockpit mouse options. Textbox elements must not attach duplicate `readInput` listeners.
+
+---
+
+## [MD-044] 2026-11-03: Herdr-Engine UI Alignment & Zero-Leak Terminal Input Prompt
+- **Context:** The Captain noted that TurfCode CLI cockpit still appeared cluttered compared to Herdr's pristine interface, with box borders enclosing the terminal pane and sidebar, and mysterious characters (`¤77CC¥¥77CC...`) automatically streaming into the input box on Windows Terminal.
+- **The Fork:** Keep Blessed's default boxed widget layout and surface-level keypress filtering vs. Deeply inspect Herdr's actual Rust/Ratatui source code (`/tmp/herdr`), replicate its borderless layout architecture, and permanently eradicate terminal mouse sequence leaks at the protocol level.
+- **Resolution:** Replicate Herdr's exact multiplexer layout architecture and apply triple-lock mouse isolation.
+  1. **Herdr Layout Architecture Replication:**
+     - Inspected `/tmp/herdr/src/client/shell/render.rs`, `sidebar.rs`, `composition.rs`, and `tabs.rs`. Herdr uses zero surrounding rectangular box frames.
+     - **Sidebar:** Full-height borderless column with only a single vertical right divider line (`│`, `border: { right: true, top: false, bottom: false, left: false }`). Inside, sections (`spaces`, `intents & tasks`, `active locks`, `peers`) are demarcated by subtle thin horizontal rules (`─`).
+     - **Terminal Pane:** Completely borderless (`top: false, bottom: false, left: false, right: false`). Terminal output flows edge-to-edge from the sidebar divider to the window edge.
+     - **Unified Tab Strip:** Positioned at row 0 of the terminal pane. Displays active tab as a solid Electric Lime pill (` 1: Shell `), followed by `+`, with right-aligned session metadata (`● TURF-XXXX • HOST • User`).
+     - **Understated Input Bar:** Positioned at the bottom row beneath a single horizontal divider (`─`). Features `turf > ` prompt on the left and right-aligned keybinding shortcuts (`[Tab] Focus  [D] Diff  [F] Files  [Ctrl+B] Sidebar`).
+  2. **Ghost Typing Root-Cause Elimination (`¤77CC¥¥77CC...`):**
+     - Root Cause: In Blessed, when mouse tracking is active, `utfMouse` mode (`1005`) encodes terminal column/row coordinates > 127 as UTF-8 bytes (e.g. byte 164 is `\xc2\xa4` which decodes as `¤`, byte 165 decodes as `¥`, and `77CC` are SGR/X10 cell coordinates).
+     - **Triple-Lock Solution:**
+       1. Set `process.env.BLESSED_FORCE_MODES = 'ALLMOTION=0,CELLMOTION=0,UTFMOUSE=0,X10MOUSE=0,SGRMOUSE=0,VT200MOUSE=0,SENDFOCUS=0'` before screen instantiation.
+       2. Neutered `screen.program.enableMouse`, `screen.program.disableMouse`, `screen.program.setMouse`, and `screen.enableMouse` into permanent NO-OPs.
+       3. Sent raw escape sequence `\x1b[?1006l\x1b[?1016l\x1b[?1015l\x1b[?1005l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?9l` directly to stdout to ensure the terminal emulator drops all mouse reporting.
+       4. Hardened `inputBox._listener` with regex `/^[\u0080-\u00FF]/` to discard any Latin-1 coordinate remnants before they reach the text buffer.
+- **Reason:** Matching Herdr's spatial distribution requires dropping nested box containers in favor of single-line dividers and generous whitespace. Neutering terminal mouse tracking prevents terminal emulators from flooding stdin with escape packets, completely resolving ghost typing.
+- **Worker Invariant:** Terminal pane must remain borderless. Mouse tracking modes 1003 and 1005 must never be enabled. Input box must strictly filter ANSI escape codes and Latin-1 coordinate sequences.

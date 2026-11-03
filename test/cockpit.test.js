@@ -299,6 +299,11 @@ test('Cockpit disables allMotion and rejects stray mouse escape artifacts [MD-04
     cockpit.inputBox._listener('\x1b[MCF,', {});
     assert.equal(cockpit.inputBox.value, '', 'ANSI escape sequence must not leak into inputBox');
 
+    // UTF/X10 mouse coordinates (>127 Latin1 range: ¤, ¥, ¦, etc.) [MD-044]
+    cockpit.inputBox._listener('¤', {});
+    cockpit.inputBox._listener('¥', {});
+    assert.equal(cockpit.inputBox.value, '', 'UTF mouse coordinates (¤, ¥) must not leak into inputBox');
+
     // Legitimate keypress works
     cockpit.inputBox._listener('h', { name: 'h' });
     cockpit.inputBox._listener('i', { name: 'i' });
