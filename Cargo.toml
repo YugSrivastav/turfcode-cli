@@ -3,6 +3,8 @@ resolver = "2"
 members = [
     "crates/turf-pty",
     "crates/turf-vte",
+    "crates/turf-protocol",
+    "crates/turf-core",
 ]
 
 [workspace.package]
