@@ -84,11 +84,7 @@ export function createCockpit(options = {}) {
     format: 'tags'
   });
 
-  const defaultInitialTasks = initialTasks.length > 0 ? initialTasks : [
-    { id: '1', title: 'Initialize Electric Lime Cockpit', assignee: userName, status: 'in_progress', targetFiles: [] },
-    { id: '2', title: 'Connect Tunnel & Lock Manager', assignee: 'Team', status: 'queued', targetFiles: [] },
-    { id: '0', title: 'Repository & Architecture Spec', assignee: 'Yug', status: 'done', targetFiles: [] }
-  ];
+  const defaultInitialTasks = initialTasks.length > 0 ? initialTasks : [];
 
   const intentBoard = customIntentBoard || new IntentBoard({
     cwd: currentDir,
@@ -105,6 +101,8 @@ export function createCockpit(options = {}) {
     { name: userName, role: role, isSelf: true }
   ];
 
+  const displayDir = path.basename(currentDir) || currentDir;
+
   // 1. Create Blessed Screen
   const screen = blessed.screen({
     smartCSR: true,
@@ -119,34 +117,53 @@ export function createCockpit(options = {}) {
     ...screenOptions
   });
 
-  // 2. Top Header Bar
+  // 2. Top Header Bar (Herdr-style unified status strip)
   const header = blessed.box({
     parent: screen,
     ...BLESSED_STYLES.header,
-    content: ` {bold}{#39ff14-fg}TURFCODE{/#39ff14-fg}{/bold} │ Room: {bold}{#eab308-fg}${roomCode}{/#eab308-fg}{/bold} │ Mode: {bold}{#39ff14-fg}${mode.toUpperCase()}{/#39ff14-fg}{/bold} │ User: {#06b6d4-fg}${userName}{/#06b6d4-fg} │ Dir: {#4a7c4a-fg}${path.basename(currentDir) || currentDir}{/#4a7c4a-fg}`
+    content: ` {bold}{#39ff14-fg}TURFCODE{/#39ff14-fg}{/bold}  {#eab308-fg}${roomCode}{/#eab308-fg}  {#4a7c4a-fg}•{/#4a7c4a-fg}  {#f0fff0-fg}${mode.toUpperCase()}{/#f0fff0-fg}  {#4a7c4a-fg}•{/#4a7c4a-fg}  {#06b6d4-fg}${userName}{/#06b6d4-fg}  {#4a7c4a-fg}•{/#4a7c4a-fg}  {#4a7c4a-fg}${displayDir}{/#4a7c4a-fg}`
   });
 
-  // 3. Left Sidebar (30% Intent Board)
+  // 3. Left Sidebar (Herdr-style unified column)
   const sidebar = blessed.box({
     parent: screen,
     top: 1,
     left: 0,
     width: '30%',
     height: '100%-2',
+    border: { type: 'line', fg: PALETTE.mutedBorder },
     style: {
+      bg: PALETTE.bg,
+      border: { fg: PALETTE.mutedBorder }
+    }
+  });
+
+  // 3-spaces. Spaces Container (Workspace/repo overview, Herdr-style)
+  const spacesBox = blessed.box({
+    parent: sidebar,
+    top: 0,
+    left: 1,
+    width: '100%-2',
+    height: 3,
+    tags: true,
+    style: {
+      fg: PALETTE.textBright,
       bg: PALETTE.bg
     }
   });
 
-  // 3a. Tasks Container (MD-037 4-field schema)
+  function renderSpaces() {
+    spacesBox.setContent(`{bold}{#4a7c4a-fg}SPACES{/#4a7c4a-fg}{/bold}\n {#39ff14-fg}○{/#39ff14-fg} {#f0fff0-fg}${displayDir}{/#f0fff0-fg}\n   {#4a7c4a-fg}main  clean{/#4a7c4a-fg}`);
+  }
+  renderSpaces();
+
+  // 3a. Tasks Container (MD-037 4-field schema, Herdr-style borderless section)
   const tasksBox = blessed.box({
     parent: sidebar,
-    top: 0,
-    left: 0,
-    width: '100%',
-    height: '48%',
-    label: ` {bold}{#39ff14-fg}📋 INTENT & TASKS{/#39ff14-fg}{/bold} `,
-    border: { type: 'line', fg: PALETTE.mutedBorder },
+    top: 4,
+    left: 1,
+    width: '100%-2',
+    height: '42%',
     tags: true,
     scrollable: true,
     alwaysScroll: true,
@@ -155,45 +172,43 @@ export function createCockpit(options = {}) {
     vi: true,
     style: {
       fg: PALETTE.textBright,
-      bg: PALETTE.bg,
-      border: { fg: PALETTE.mutedBorder }
+      bg: PALETTE.bg
     }
   });
 
   function renderTasks() {
     const currentTasks = intentBoard.getTasks();
     const currentLocks = lockManager.getLocks();
+    const headerLine = `{bold}{#4a7c4a-fg}INTENTS & TASKS{/#4a7c4a-fg}{/bold}`;
     if (!currentTasks || currentTasks.length === 0) {
-      tasksBox.setContent(`\n ${TAGS.dim('(No tasks in intent queue)')}`);
+      tasksBox.setContent(`${headerLine}\n ${TAGS.dim('(No tasks in intent queue)')}`);
       return;
     }
     const lines = currentTasks.map(t => intentBoard.formatTaskCard(t, currentLocks));
-    tasksBox.setContent(lines.join('\n\n'));
+    tasksBox.setContent(`${headerLine}\n${lines.join('\n\n')}`);
   }
 
-  // 3b. File Lock Table (MD-002, MD-040)
+  // 3b. File Lock Table (MD-002, MD-040, Herdr-style borderless section)
   const locksBox = blessed.box({
     parent: sidebar,
     top: '48%',
-    left: 0,
-    width: '100%',
-    height: '28%',
-    label: ` {bold}{#ef4444-fg}🔒 FILE LOCK TABLE{/#ef4444-fg}{/bold} `,
-    border: { type: 'line', fg: PALETTE.mutedBorder },
+    left: 1,
+    width: '100%-2',
+    height: '24%',
     tags: true,
     scrollable: true,
     mouse: true,
     style: {
       fg: PALETTE.textBright,
-      bg: PALETTE.bg,
-      border: { fg: PALETTE.mutedBorder }
+      bg: PALETTE.bg
     }
   });
 
   function renderLocks() {
     const currentLocks = lockManager.getLocks();
+    const headerLine = `{bold}{#4a7c4a-fg}ACTIVE FILE LOCKS{/#4a7c4a-fg}{/bold}`;
     if (!currentLocks || currentLocks.length === 0) {
-      locksBox.setContent(`\n ${TAGS.dim('(No active file locks - workspace free)')}`);
+      locksBox.setContent(`${headerLine}\n ${TAGS.dim('(No active file locks - workspace free)')}`);
       return;
     }
     const lines = currentLocks.map(l => {
@@ -201,18 +216,16 @@ export function createCockpit(options = {}) {
       const fPath = l.filePath || l.file;
       return ` {#ef4444-fg}🔒 ${fPath}{/#ef4444-fg} ${TAGS.dim(`[Held by ${holder}]`)}`;
     });
-    locksBox.setContent(lines.join('\n'));
+    locksBox.setContent(`${headerLine}\n${lines.join('\n')}`);
   }
 
   // 3b-alt. Interactive File Tree with Padlock Badges [MD-027]
   const fileTreeBox = blessed.box({
     parent: sidebar,
     top: 0,
-    left: 0,
-    width: '100%',
-    height: '76%',
-    label: ` {bold}{#39ff14-fg}📁 WORKSPACE FILE TREE [F]{/#39ff14-fg}{/bold} `,
-    border: { type: 'line', fg: PALETTE.mutedBorder },
+    left: 1,
+    width: '100%-2',
+    height: '100%-2',
     tags: true,
     scrollable: true,
     alwaysScroll: true,
@@ -222,8 +235,7 @@ export function createCockpit(options = {}) {
     hidden: true,
     style: {
       fg: PALETTE.textBright,
-      bg: PALETTE.bg,
-      border: { fg: PALETTE.mutedBorder }
+      bg: PALETTE.bg
     }
   });
 
@@ -234,8 +246,10 @@ export function createCockpit(options = {}) {
   function toggleFileTree() {
     isFileTreeVisible = !isFileTreeVisible;
     if (isFileTreeVisible) {
+      spacesBox.hide();
       tasksBox.hide();
       locksBox.hide();
+      peersBox.hide();
       fileTreeBox.show();
       renderFileTree();
       if (focusIndex === 0) {
@@ -243,8 +257,10 @@ export function createCockpit(options = {}) {
       }
     } else {
       fileTreeBox.hide();
+      spacesBox.show();
       tasksBox.show();
       locksBox.show();
+      peersBox.show();
       renderTasks();
       renderLocks();
       if (focusIndex === 0) {
@@ -275,28 +291,26 @@ export function createCockpit(options = {}) {
     screen.render();
   });
 
-  // 3c. Connected Peers Container
+  // 3c. Connected Peers Container (Herdr-style borderless section)
   const peersBox = blessed.box({
     parent: sidebar,
-    top: '76%',
-    left: 0,
-    width: '100%',
-    height: '100%-76%-3',
-    label: ` {bold}{#06b6d4-fg}👥 CONNECTED PEERS{/#06b6d4-fg}{/bold} `,
-    border: { type: 'line', fg: PALETTE.mutedBorder },
+    top: '74%',
+    left: 1,
+    width: '100%-2',
+    height: '100%-74%-2',
     tags: true,
     scrollable: true,
     mouse: true,
     style: {
       fg: PALETTE.textBright,
-      bg: PALETTE.bg,
-      border: { fg: PALETTE.mutedBorder }
+      bg: PALETTE.bg
     }
   });
 
   function renderPeers() {
+    const headerLine = `{bold}{#4a7c4a-fg}CONNECTED PEERS{/#4a7c4a-fg}{/bold}`;
     if (!peers || peers.length === 0) {
-      peersBox.setContent(`\n ${TAGS.dim('(Solo session)')}`);
+      peersBox.setContent(`${headerLine}\n ${TAGS.dim('(Solo session)')}`);
       return;
     }
     const lines = peers.map(p => {
@@ -304,7 +318,7 @@ export function createCockpit(options = {}) {
       const selfLabel = p.isSelf ? ` ${TAGS.limeBold('(You)')}` : '';
       return ` ${dot} {#f0fff0-fg}${p.name}{/#f0fff0-fg}${selfLabel} ${TAGS.cyan(`[${p.role}]`)}`;
     });
-    peersBox.setContent(lines.join('\n'));
+    peersBox.setContent(`${headerLine}\n${lines.join('\n')}`);
   }
 
   // Wire TunnelServer events (Host mode)
@@ -358,23 +372,20 @@ export function createCockpit(options = {}) {
     });
   }
 
-  // 3d. Sidebar Collapse Button
+  // 3d. Sidebar Collapse Button (Minimal bottom toggle)
   const collapseBtn = blessed.button({
     parent: sidebar,
     bottom: 0,
-    left: 0,
-    width: '100%',
-    height: 3,
-    border: { type: 'line', fg: PALETTE.mutedBorder },
-    content: ` {bold}{#39ff14-fg}«{/#39ff14-fg} Collapse Sidebar {/bold}${TAGS.dim('[Ctrl+B]')}`,
+    left: 1,
+    width: '100%-2',
+    height: 1,
+    content: `{#4a7c4a-fg}« Collapse Sidebar [Ctrl+B]{/#4a7c4a-fg}`,
     tags: true,
     mouse: true,
     style: {
-      fg: PALETTE.textBright,
+      fg: PALETTE.textMuted,
       bg: PALETTE.bg,
-      border: { fg: PALETTE.mutedBorder },
-      hover: { bg: PALETTE.headerBg },
-      focus: { border: { fg: PALETTE.activeBorder } }
+      hover: { fg: PALETTE.electricLime }
     }
   });
 
@@ -394,7 +405,7 @@ export function createCockpit(options = {}) {
     }
   });
 
-  // 4a. Tab Bar
+  // 4a. Tab Bar (Herdr-style pill tab row)
   const tabBar = blessed.box({
     parent: terminalPane,
     top: 0,
@@ -405,29 +416,15 @@ export function createCockpit(options = {}) {
     mouse: true,
     style: {
       fg: PALETTE.textMuted,
-      bg: PALETTE.headerBg
+      bg: PALETTE.bg
     }
   });
 
-  // Define Tabs: 1: Shell, 2: Agent (agy), 3: Agent 2
+  // Define Tabs: 1: Shell (mock tabs 2 & 3 removed)
   const tabs = [
     {
       id: 'shell',
       name: '1: Shell',
-      log: null,
-      activeProc: null,
-      history: []
-    },
-    {
-      id: 'agent-1',
-      name: '2: agy (Host)',
-      log: null,
-      activeProc: null,
-      history: []
-    },
-    {
-      id: 'agent-2',
-      name: '3: agy (Peer)',
       log: null,
       activeProc: null,
       history: []
@@ -441,7 +438,7 @@ export function createCockpit(options = {}) {
       top: 1,
       left: 0,
       width: '100%-2',
-      height: '100%-5',
+      height: '100%-3',
       scrollable: true,
       alwaysScroll: true,
       tags: true,
@@ -460,22 +457,20 @@ export function createCockpit(options = {}) {
     const tabParts = tabs.map((t, idx) => {
       const active = idx === activeTabIndex;
       if (active) {
-        return `{bold}{#081008-bg}{#39ff14-fg} [ ${t.name} ] {/#39ff14-fg}{/#081008-bg}{/bold}`;
+        return `{bold}{#39ff14-bg}{#081008-fg} ${t.name} {/#081008-fg}{/#39ff14-bg}{/bold}`;
       } else {
-        return `{#4a7c4a-fg} [ ${t.name} ] {/#4a7c4a-fg}`;
+        return `{#4a7c4a-fg} ${t.name} {/#4a7c4a-fg}`;
       }
     });
-    tabParts.push(`{#2a5a2a-fg}[ + New ]{/#2a5a2a-fg}`);
+    tabParts.push(`{#2a5a2a-fg} + {/#2a5a2a-fg}`);
     tabBar.setContent(` ${tabParts.join(' ')}`);
   }
 
   function printWelcomeBanner(log) {
-    log.log(`{#1b3b1b-fg}┌─────────────────────────────────────────────────────────────┐{/#1b3b1b-fg}`);
-    log.log(`{#1b3b1b-fg}│{/#1b3b1b-fg}  {bold}{#39ff14-fg}TURFCODE ELECTRIC LIME COCKPIT v0.1.0{/#39ff14-fg}{/bold} — {#22c55e-fg}READY{/#22c55e-fg}             {#1b3b1b-fg}│{/#1b3b1b-fg}`);
-    log.log(`{#1b3b1b-fg}│{/#1b3b1b-fg}  Session: {#eab308-fg}${roomCode}{/#eab308-fg}  │ Mode: {#39ff14-fg}${mode.toUpperCase()}{/#39ff14-fg}  │ Directory: {#4a7c4a-fg}${currentDir}{/#4a7c4a-fg} {#1b3b1b-fg}│{/#1b3b1b-fg}`);
-    log.log(`{#1b3b1b-fg}│{/#1b3b1b-fg}  Multi-Agent Terminal: Parallel execution without screen wipe {#1b3b1b-fg}│{/#1b3b1b-fg}`);
-    log.log(`{#1b3b1b-fg}│{/#1b3b1b-fg}  [D] Diff │ [F] Files │ [Ctrl+B] Sidebar │ [Tab] Focus     {#1b3b1b-fg}│{/#1b3b1b-fg}`);
-    log.log(`{#1b3b1b-fg}└─────────────────────────────────────────────────────────────┘{/#1b3b1b-fg}\n`);
+    log.log(`{bold}{#39ff14-fg}⚡ TURFCODE ELECTRIC LIME COCKPIT v0.1.0{/#39ff14-fg}{/bold} — {#22c55e-fg}READY{/#22c55e-fg}`);
+    log.log(`{#4a7c4a-fg}Session:{/#4a7c4a-fg} {#eab308-fg}${roomCode}{/#eab308-fg}  {#4a7c4a-fg}• Mode:{/#4a7c4a-fg} {#39ff14-fg}${mode.toUpperCase()}{/#39ff14-fg}  {#4a7c4a-fg}• Workspace:{/#4a7c4a-fg} {#f0fff0-fg}${displayDir}{/#f0fff0-fg}`);
+    log.log(`{#4a7c4a-fg}Multi-Agent Terminal: Parallel execution without screen wipe{/#4a7c4a-fg}`);
+    log.log(`{#4a7c4a-fg}Shortcuts: [Tab] Focus • [D] Diff • [F] Files • [Ctrl+B] Sidebar{/#4a7c4a-fg}\n`);
     if (recoveryResult && recoveryResult.recovered) {
       log.log(`${TAGS.limeBold('[SELF-HEALING]')} ${TAGS.yellow(recoveryResult.notice)}\n`);
     }
@@ -495,7 +490,7 @@ export function createCockpit(options = {}) {
         top: 1,
         left: 0,
         width: '100%-2',
-        height: '100%-5',
+        height: '100%-3',
         scrollable: true,
         alwaysScroll: true,
         tags: true,
@@ -567,7 +562,7 @@ export function createCockpit(options = {}) {
       top: 1,
       left: 0,
       width: '100%-2',
-      height: '100%-5',
+      height: '100%-3',
       scrollable: true,
       alwaysScroll: true,
       tags: true,
@@ -650,21 +645,18 @@ export function createCockpit(options = {}) {
     }
   });
 
-  // 4b. Command / Prompt Input Box
+  // 4b. Command / Prompt Input Box (Herdr-style minimal prompt line)
   const inputContainer = blessed.box({
     parent: terminalPane,
     bottom: 0,
     left: 0,
     width: '100%-2',
-    height: 3,
-    border: { type: 'line', fg: PALETTE.activeBorder },
-    label: ` {bold}{#39ff14-fg}✍️ Command / Agent Prompt{/#39ff14-fg}{/bold} `,
+    height: 1,
     tags: true,
     mouse: true,
     style: {
       fg: PALETTE.textBright,
-      bg: PALETTE.bg,
-      border: { fg: PALETTE.activeBorder }
+      bg: PALETTE.bg
     }
   });
 
@@ -691,11 +683,11 @@ export function createCockpit(options = {}) {
     }
   });
 
-  // 5. Bottom Footer Bar
+  // 5. Bottom Footer Bar (Clean, understated keybinding reference)
   const footer = blessed.box({
     parent: screen,
     ...BLESSED_STYLES.footer,
-    content: ` {bold}{#39ff14-fg}[Tab]{/#39ff14-fg}{/bold} Focus │ {bold}{#39ff14-fg}[D]{/#39ff14-fg}{/bold} Diff │ {bold}{#39ff14-fg}[F]{/#39ff14-fg}{/bold} Files │ {bold}{#39ff14-fg}[Ctrl+B]{/#39ff14-fg}{/bold} Sidebar │ {bold}{#39ff14-fg}[Ctrl+1..9]{/#39ff14-fg}{/bold} Tabs `
+    content: ` {#39ff14-fg}[Tab]{/#39ff14-fg} {#4a7c4a-fg}Focus{/#4a7c4a-fg}   {#39ff14-fg}[D]{/#39ff14-fg} {#4a7c4a-fg}Diff{/#4a7c4a-fg}   {#39ff14-fg}[F]{/#39ff14-fg} {#4a7c4a-fg}Files{/#4a7c4a-fg}   {#39ff14-fg}[Ctrl+B]{/#39ff14-fg} {#4a7c4a-fg}Sidebar{/#4a7c4a-fg}   {#39ff14-fg}[Ctrl+1..9]{/#39ff14-fg} {#4a7c4a-fg}Tabs{/#4a7c4a-fg}`
   });
 
   // Helper: Get Active Tab & Log
@@ -711,28 +703,21 @@ export function createCockpit(options = {}) {
   function setFocus(idx) {
     focusIndex = (idx + 3) % 3;
 
-    // Reset all borders to muted
-    tasksBox.style.border.fg = PALETTE.mutedBorder;
-    fileTreeBox.style.border.fg = PALETTE.mutedBorder;
+    sidebar.style.border.fg = PALETTE.mutedBorder;
     terminalPane.style.border.fg = PALETTE.mutedBorder;
-    inputContainer.style.border.fg = PALETTE.mutedBorder;
 
     if (focusIndex === 0) {
-      // Focus Sidebar (Intent Board or File Tree)
+      sidebar.style.border.fg = PALETTE.activeBorder;
       if (isFileTreeVisible) {
-        fileTreeBox.style.border.fg = PALETTE.activeBorder;
         fileTreeBox.focus();
       } else {
-        tasksBox.style.border.fg = PALETTE.activeBorder;
         tasksBox.focus();
       }
     } else if (focusIndex === 1) {
-      // Focus Terminal Log
       terminalPane.style.border.fg = PALETTE.activeBorder;
       getActiveLog().focus();
     } else {
-      // Focus Input Box
-      inputContainer.style.border.fg = PALETTE.activeBorder;
+      terminalPane.style.border.fg = PALETTE.activeBorder;
       inputBox.focus();
       inputBox.readInput();
     }
@@ -749,6 +734,7 @@ export function createCockpit(options = {}) {
 
     if (isSidebarCollapsed) {
       sidebar.width = 4;
+      spacesBox.hide();
       tasksBox.hide();
       locksBox.hide();
       fileTreeBox.hide();
@@ -762,18 +748,20 @@ export function createCockpit(options = {}) {
       sidebar.width = '30%';
       if (isFileTreeVisible) {
         fileTreeBox.show();
+        spacesBox.hide();
         tasksBox.hide();
         locksBox.hide();
       } else {
         fileTreeBox.hide();
+        spacesBox.show();
         tasksBox.show();
         locksBox.show();
       }
       peersBox.show();
       collapseBtn.top = undefined;
       collapseBtn.bottom = 0;
-      collapseBtn.height = 3;
-      collapseBtn.setContent(` {bold}{#39ff14-fg}«{/#39ff14-fg} Collapse Sidebar {/bold}${TAGS.dim('[Ctrl+B]')}`);
+      collapseBtn.height = 1;
+      collapseBtn.setContent(`{#4a7c4a-fg}« Collapse Sidebar [Ctrl+B]{/#4a7c4a-fg}`);
       terminalPane.left = '30%';
       terminalPane.width = '70%';
     }
@@ -1236,6 +1224,7 @@ export function createCockpit(options = {}) {
     screen,
     header,
     sidebar,
+    spacesBox,
     tasksBox,
     locksBox,
     fileTreeBox,

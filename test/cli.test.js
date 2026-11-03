@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseArgs, generateRoomCode, runCLI } from '../src/cli.js';
+import { parseArgs, generateRoomCode, runCLI, normalizeWorkspacePath } from '../src/cli.js';
 import { runPreflightChecks } from '../src/preflight.js';
 
 test('CLI parseArgs handles subcommands and flags', () => {
@@ -55,4 +55,20 @@ test('package.json defines bin entries for both turf and turfcode [MD-041]', asy
   const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
   assert.equal(pkg.bin.turf, './bin/turf.js');
   assert.equal(pkg.bin.turfcode, './bin/turf.js');
+});
+
+test('normalizeWorkspacePath handles Windows paths, quotes, and relative paths [MD-042]', () => {
+  const resolvedDot = normalizeWorkspacePath('.');
+  assert.equal(resolvedDot, process.cwd());
+
+  const resolvedRelative = normalizeWorkspacePath('./test-sub');
+  assert.ok(resolvedRelative.endsWith('test-sub'));
+
+  if (process.platform === 'linux') {
+    const winPath = normalizeWorkspacePath('C:\\Users\\yugsr\\firstmate\\projects\\turfcode-cli');
+    assert.equal(winPath, '/mnt/c/Users/yugsr/firstmate/projects/turfcode-cli');
+
+    const winSlashPath = normalizeWorkspacePath('"C:/Users/yugsr/firstmate/projects/turfcode-cli"');
+    assert.equal(winSlashPath, '/mnt/c/Users/yugsr/firstmate/projects/turfcode-cli');
+  }
 });

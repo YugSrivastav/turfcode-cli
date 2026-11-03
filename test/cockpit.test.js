@@ -16,7 +16,7 @@ test('Cockpit boots in non-interactive environment with 2-section layout', () =>
     assert.equal(cockpit.sidebar.position.width, '30%', 'Sidebar width must be 30% [MD-001]');
     assert.equal(cockpit.terminalPane.position.width, '70%', 'Terminal pane width must be 70% [MD-001]');
     assert.equal(cockpit.isSidebarCollapsed, false, 'Sidebar starts expanded');
-    assert.equal(cockpit.tabs.length, 3, 'Must initialize default tabs');
+    assert.equal(cockpit.tabs.length, 1, 'Must initialize default shell tab without mock tabs');
   } finally {
     cockpit.destroy();
   }
@@ -84,7 +84,13 @@ test('Cockpit switches tabs (Ctrl+1..9) cleanly', () => {
   try {
     assert.equal(cockpit.activeTabIndex, 0);
     assert.equal(cockpit.tabs[0].log.hidden, false);
+
+    // Add dynamic agent tabs
+    cockpit.addAgentTab({ name: '2: agy (Host)' });
+    cockpit.addAgentTab({ name: '3: agy (Peer)' });
+
     assert.equal(cockpit.tabs[1].log.hidden, true);
+    assert.equal(cockpit.tabs[2].log.hidden, true);
 
     // Switch to tab 1 (Ctrl+2)
     cockpit.switchTab(1);

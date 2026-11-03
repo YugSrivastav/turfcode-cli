@@ -337,3 +337,16 @@ All crewmates, contributors, and agents MUST adhere to these invariants when mod
   Choosing `[1] Create a Turf` prompts for the folder to live host (defaulting to current folder `.`). It validates and normalizes the folder path (resolves relative paths, strips surrounding quotes, expands directory if non-existent), generates the 6-character Session ID (e.g. `TURF-7A9B`), displays a clear visual banner with the Session ID and instructions to share it with collaborators, and boots the Electric Lime Cockpit hosting that folder.
 - **Reason:** Users downloading `turfcode` want zero friction to spin up a collaborative session without remembering subcommands. Explicitly prompting for the directory and displaying the Session ID upfront gives the host immediate confirmation of what is being hosted and what code to send to peers.
 - **Worker Invariant:** Both `turf` and `turfcode` binary symlinks must be defined in `package.json`. Interactive menu must strictly offer `[1] Create a Turf` and `[2] Join a Turf`, validate the input directory, and disclose the generated Session ID before cockpit initialization.
+
+---
+
+## [MD-042] 2026-11-03: Herdr-Style Unified Typographic Layout & Mockup Removal
+- **Context:** Initial cockpit appearance had heavy box borders cutting the sidebar into separate boxed widgets, mock initial tasks (`#1`, `#2`, `#0`), and mock agent tabs (`2: agy (Host)`, `3: agy (Peer)`).
+- **The Fork:** Clunky nested boxed widgets with placeholder mockups vs. Herdr-style seamless vertical typographic hierarchy with 100% genuine system state.
+- **Resolution:** Herdr-style seamless vertical typographic hierarchy.
+  1. **Purge Mockups:** Remove hardcoded initial tasks from `IntentBoard` initialization and remove mock tabs from `cockpit.js`. Default tasks are empty until user creates them; default tabs is strictly `1: Shell` until dynamic agent tabs or diff tab are spawned.
+  2. **Unified Continuous Sidebar:** Transform the left sidebar from 4 heavy bordered boxes into a single continuous, borderless column with Herdr-inspired typographic sections (`SPACES`, `INTENTS & TASKS`, `ACTIVE FILE LOCKS`, `CONNECTED PEERS`).
+  3. **Streamlined Right Pane:** Eliminate nested border boxes around the terminal log, streamline the tab strip to an inverted highlight pill (` 1: Shell `), and turn the input box into a sleek single-line prompt (`turf > `) with a subtle top border line instead of a heavy boxed container with an emoji label.
+  4. **WSL Windows Path Normalization:** Implement `normalizeWorkspacePath` to seamlessly handle Windows drive paths pasted in WSL/Linux, preventing double `/mnt/c/mnt/c/...` path corruptions.
+- **Reason:** Herdr's spatial distribution succeeds because of clean typographic hierarchy and generous whitespace, rather than drawing heavy ASCII boxes inside boxes. Eliminating mockups ensures the cockpit reflects 100% genuine system state.
+- **Worker Invariant:** No hardcoded mock tasks or mock tabs. Sidebar sections must not nest bordered boxes inside `sidebar`. Input box must render as a sleek single-line prompt.

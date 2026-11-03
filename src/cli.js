@@ -24,6 +24,21 @@ export function generateRoomCode() {
   return generateRoomCodeFromTunnel(4);
 }
 
+export function normalizeWorkspacePath(inputPath, baseDir = process.cwd()) {
+  if (!inputPath || inputPath.trim() === '' || inputPath.trim() === '.') {
+    return baseDir;
+  }
+  let p = inputPath.trim().replace(/^["']|["']$/g, '');
+  const winMatch = p.match(/^([a-zA-Z]):[\\/](.*)$/);
+  if (winMatch && process.platform === 'linux') {
+    const driveLetter = winMatch[1].toLowerCase();
+    const rest = winMatch[2].replace(/\\/g, '/');
+    return path.resolve(`/mnt/${driveLetter}/${rest}`);
+  }
+  p = p.replace(/\\/g, '/');
+  return path.resolve(baseDir, p);
+}
+
 export function parseArgs(rawArgs) {
   const args = rawArgs.slice(2);
   const result = {
@@ -120,8 +135,7 @@ export async function promptInteractiveMenu() {
       if (choice === '1') {
         rl.question(CHALK.lime('  Enter folder to host [default: .]: '), (inputDir) => {
           rl.close();
-          const rawDir = inputDir.trim().replace(/^["']|["']$/g, '') || '.';
-          const resolvedDir = path.resolve(process.cwd(), rawDir);
+          const resolvedDir = normalizeWorkspacePath(inputDir);
 
           if (!fs.existsSync(resolvedDir)) {
             console.log(CHALK.amber(`\n  ⚠️  Notice: Directory "${resolvedDir}" does not exist. Creating it...`));
@@ -191,7 +205,7 @@ export async function runCLI(argv = process.argv) {
   }
 
   if (command === 'host') {
-    const targetDir = path.resolve(process.cwd(), dir || '.');
+    const targetDir = normalizeWorkspacePath(dir || '.');
     const roomCode = interactiveRoomCode || generateRoomCode();
     const port = process.env.TURF_PORT ? parseInt(process.env.TURF_PORT, 10) : 0;
     const tunnelServer = new TunnelServer({

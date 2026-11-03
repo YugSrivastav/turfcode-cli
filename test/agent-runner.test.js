@@ -300,16 +300,16 @@ test('Cockpit integration: dynamic tabs for active running agents (Ctrl+1..9) an
 
   try {
     assert.ok(cockpit.agentRunner, 'Cockpit must expose agentRunner');
-    assert.equal(cockpit.tabs.length, 3, 'Initial default tabs');
+    assert.equal(cockpit.tabs.length, 1, 'Initial default tab (Shell)');
 
     // 1. Add dynamic tab for active running agent
     const newTab = cockpit.addAgentTab({
       taskId: 'agent-404',
       ownerId: 'Ayush',
-      name: '4: agy (#agent-404)'
+      name: '2: agy (#agent-404)'
     });
 
-    assert.equal(cockpit.tabs.length, 4, 'Dynamic tab must be added to right pane');
+    assert.equal(cockpit.tabs.length, 2, 'Dynamic tab must be added to right pane');
     assert.equal(newTab.taskId, 'agent-404');
     assert.equal(newTab.ownerId, 'Ayush');
 
@@ -346,10 +346,10 @@ test('Cockpit integration: dynamic tabs for active running agents (Ctrl+1..9) an
 
     assert.ok(tabLogs.some(l => l.includes('completed successfully')), 'Exit event must appear in agent tab');
 
-    // 5. Test tab switching to dynamic tab (Ctrl+4 / switchTab(3))
-    cockpit.switchTab(3);
-    assert.equal(cockpit.activeTabIndex, 3);
-    assert.equal(cockpit.tabs[3].log.hidden, false);
+    // 5. Test tab switching to dynamic tab (Ctrl+2 / switchTab(1))
+    cockpit.switchTab(1);
+    assert.equal(cockpit.activeTabIndex, 1);
+    assert.equal(cockpit.tabs[1].log.hidden, false);
   } finally {
     cockpit.destroy();
   }
