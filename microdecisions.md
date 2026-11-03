@@ -226,3 +226,83 @@ All crewmates, contributors, and agents MUST adhere to these invariants when mod
 - **The Fork:** Pure Node.js ESM package (`npm install -g turfcode` / `npx turfcode`) vs. standalone compiled binary.
 - **Resolution:** Option A: Global NPM package (`npx turfcode`). Instant cross-platform compatibility across Windows (PowerShell/WSL), macOS, and Linux on Node.js 20+.
 - **Worker Invariant:** Must declare `"type": "module"`, specify executable bin in `package.json`, and run zero native compilation steps during install.
+
+---
+
+## [MD-029] 2026-11-03: Direct Binary Subprocess Execution
+- **Context:** Invoking agent CLI binaries without shell escape corruption.
+- **The Fork:** Direct binary execution via `child_process.spawn('agy', ...)` vs. interactive shell subshell wrapper.
+- **Resolution:** Option A: Direct Binary Execution. `agy` and helper tools spawn directly with explicit argument arrays and isolated environment tables. Prevents quote stripping and shell variable leakage.
+- **Worker Invariant:** Never pass raw unsanitized prompt strings into `bash -c` or `powershell -Command`.
+
+---
+
+## [MD-030] 2026-11-03: Upfront Target Scope File Locking
+- **Context:** Determining which files are locked when a task begins.
+- **The Fork:** Upfront target scope declaration in task prompt vs. dynamic pre-write interception.
+- **Resolution:** Option A: Upfront Target Scope. Task creation declares the target files/directories. TurfCode acquires the locks before the agent starts writing, preventing race conditions from the very first second.
+- **Worker Invariant:** Agent execution must not begin until all declared target files are verified unlocked.
+
+---
+
+## [MD-031] 2026-11-03: Reverse Port Forwarding for Dev Server Sharing
+- **Context:** Allowing the connected peer to view live web apps (e.g. Next.js, Vite on port 3000) running on the host.
+- **The Fork:** Reverse port forwarding over the tunnel vs. terminal-only without web preview.
+- **Resolution:** Option A: Reverse Port Forwarding. TurfCode tunnels common web dev ports (e.g. 3000, 5173, 8080) through the connection tunnel, providing the peer with a local URL to preview running web UIs.
+- **Worker Invariant:** Port forwarder must bind only when the respective host port is actively listening.
+
+---
+
+## [MD-032] 2026-11-03: Herdr / Tmux Hybrid Navigation Keybindings
+- **Context:** Keyboard ergonomics for switching panels, collapsing sidebars, and jumping tabs.
+- **The Fork:** Herdr/Tmux keybindings vs. Vim-style modal navigation.
+- **Resolution:** Option A: Herdr/Tmux keybindings. `Tab` cycles focus (Intent Board -> Terminal Pane -> Input Box). `Ctrl+B` collapses/expands the Intent sidebar. `Ctrl+1..9` jumps to agent tabs. `Ctrl+C` clears inputs.
+- **Worker Invariant:** Key event handlers must intercept control sequences cleanly without leaking raw escape codes to stdout.
+
+---
+
+## [MD-033] 2026-11-03: Fast-Forward Auto-Squash on Task Completion
+- **Context:** Merging finished agent worktree branches into the main working branch.
+- **The Fork:** Fast-forward auto-squash vs. manual peer approval gate.
+- **Resolution:** Option A: Fast-forward auto-squash. When an agent passes its validation tests, its isolated `.turf/worktrees/<task-id>` branch is squash-merged into `main`, and locks are released immediately.
+- **Worker Invariant:** Worktree teardown must verify a clean merge before deleting the worktree directory.
+
+---
+
+## [MD-034] 2026-11-03: Subtle Terminal Bell Audio Cues
+- **Context:** Notifying developers when background agent tasks complete or lock conflicts happen.
+- **The Fork:** ANSI `\x07` terminal bell vs. purely visual indicators.
+- **Resolution:** Option A: ANSI `\x07` subtle terminal bell on task completion and lock conflict alerts. Allows developers to listen for completion while multitasking.
+- **Worker Invariant:** Audio bell must be toggleable via `turf --silent`.
+
+---
+
+## [MD-035] 2026-11-03: Text-Only WebSocket Diff Streaming
+- **Context:** Bandwidth management and binary asset handling over the live sync channel.
+- **The Fork:** Text-only code/diff sync vs. full chunked binary streaming.
+- **Resolution:** Option A: Text-only streaming. Only source code diffs, markdown, JSON, and lock states stream over the WebSocket. Files >1MB or binary assets remain on host disk.
+- **Worker Invariant:** Watcher and diff generator must filter out binary extensions and large blobs.
+
+---
+
+## [MD-036] 2026-11-03: Automatic Self-Healing on Boot
+- **Context:** Recovering from unexpected crashes, power cuts, or killed processes.
+- **The Fork:** Automatic self-healing on startup vs. halting with manual confirmation prompts.
+- **Resolution:** Option A: Automatic self-healing. On startup, TurfCode inspects `.turf/session.json`. If an unclean exit occurred, it resets stale file locks, checks git status, and prints a recovery notice.
+- **Worker Invariant:** Boot recovery must never discard uncommitted git changes; uncommitted work is safely preserved.
+
+---
+
+## [MD-037] 2026-11-03: Minimalist 4-Field Task Schema
+- **Context:** Structuring task cards for the 30% Intent Board.
+- **The Fork:** Minimalist 4-field schema vs. rich Kanban cards.
+- **Resolution:** Option A: Minimalist 4-field schema (`id`, `title`, `assignee`, `status`). Fits high-density terminal layouts cleanly without vertical overflow.
+- **Worker Invariant:** Task records must strictly conform to `{ id: string, title: string, assignee: string, status: 'queued'|'in_progress'|'done' }`.
+
+---
+
+## [MD-038] 2026-11-03: Interactive Cockpit Launcher & CLI Subcommands
+- **Context:** CLI entry points and invocation workflow.
+- **The Fork:** Interactive launcher (`turf` / `npx turfcode`) with shortcut flags vs. strict subcommand-only CLI.
+- **Resolution:** Option A: Interactive Cockpit Launcher. Running `turf` displays an Electric Lime splash with `[1] Host a Turf`, `[2] Join a Turf`. Shortcut flags (`turf host .`, `turf join <ID>`, `turf kill`) provide instant power-user access.
+- **Worker Invariant:** Launcher must run pre-flight port and dependency checks before entering raw TTY mode.
