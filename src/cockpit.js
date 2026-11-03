@@ -14,6 +14,7 @@ import path from 'path';
 import { PALETTE, TAGS, BLESSED_STYLES } from './theme.js';
 import { LockManager } from './lock-manager.js';
 import { IntentBoard } from './intent-board.js';
+import { AgentRunner } from './agent-runner.js';
 
 export function createCockpit(options = {}) {
   const {
@@ -27,7 +28,8 @@ export function createCockpit(options = {}) {
     initialPeers = [],
     screenOptions = {},
     lockManager: customLockManager,
-    intentBoard: customIntentBoard
+    intentBoard: customIntentBoard,
+    agentRunner: customAgentRunner
   } = options;
 
   let currentDir = cwd;
@@ -52,6 +54,11 @@ export function createCockpit(options = {}) {
     cwd: currentDir,
     lockManager,
     initialTasks: defaultInitialTasks
+  });
+
+  const agentRunner = customAgentRunner || new AgentRunner({
+    defaultCwd: currentDir,
+    intentBoard
   });
 
   const peers = initialPeers.length > 0 ? [...initialPeers] : [
@@ -321,6 +328,114 @@ export function createCockpit(options = {}) {
     log.log(`{#1b3b1b-fg}│{/#1b3b1b-fg}  [Ctrl+B] Toggle Sidebar │ [Ctrl+1..9] Tabs │ [Tab] Focus    {#1b3b1b-fg}│{/#1b3b1b-fg}`);
     log.log(`{#1b3b1b-fg}└─────────────────────────────────────────────────────────────┘{/#1b3b1b-fg}\n`);
   }
+
+  /**
+   * Add dynamic tab in the right pane for an active agent (Ctrl+1..9)
+   * @param {Object} options
+   * @param {string|number} [options.taskId]
+   * @param {string} [options.name]
+   * @param {string} [options.ownerId]
+   * @returns {Object} Tab object
+   */
+  function addAgentTab(options = {}) {
+    const taskId = options.taskId ? String(options.taskId) : null;
+    if (taskId) {
+      const existing = tabs.find(t => t.taskId === taskId || t.id === `agent-${taskId}`);
+      if (existing) return existing;
+    }
+
+    if (tabs.length >= 9) {
+      return getActiveTab();
+    }
+
+    const tabNumber = tabs.length + 1;
+    const tabName = options.name || `${tabNumber}: agy (#${taskId || tabNumber})`;
+    const log = blessed.log({
+      parent: terminalPane,
+      top: 1,
+      left: 0,
+      width: '100%-2',
+      height: '100%-5',
+      scrollable: true,
+      alwaysScroll: true,
+      tags: true,
+      keys: true,
+      vi: true,
+      mouse: true,
+      hidden: true,
+      style: {
+        fg: PALETTE.textBright,
+        bg: PALETTE.bg
+      }
+    });
+
+    const newTab = {
+      id: taskId ? `agent-${taskId}` : `agent-${tabNumber}`,
+      taskId,
+      ownerId: options.ownerId || 'unknown',
+      name: tabName,
+      log,
+      activeProc: null,
+      history: []
+    };
+
+    tabs.push(newTab);
+    printWelcomeBanner(log);
+    renderTabs();
+    screen.render();
+    return newTab;
+  }
+
+  // Connect AgentRunner events (output, exit, error, spawn) to agent tab / active tab log box
+  agentRunner.on('spawn', (agent) => {
+    if (agent && agent.taskId) {
+      addAgentTab({
+        taskId: agent.taskId,
+        ownerId: agent.ownerId,
+        name: `${tabs.length + 1}: agy (#${agent.taskId})`
+      });
+    }
+  });
+
+  agentRunner.on('output', (event) => {
+    const text = typeof event === 'string' ? event : (event && (event.text || event.delta) ? (event.text || event.delta) : '');
+    const taskId = event && event.taskId ? String(event.taskId) : null;
+    const targetTab = (taskId && tabs.find(t => t.taskId === taskId || t.id === `agent-${taskId}`)) || getActiveTab();
+    if (targetTab && targetTab.log && text) {
+      const lines = text.split(/\r?\n/);
+      for (const line of lines) {
+        if (line.length > 0) {
+          targetTab.log.log(line);
+        }
+      }
+      screen.render();
+    }
+  });
+
+  agentRunner.on('exit', (event) => {
+    const { taskId, code, signal } = event || {};
+    const tId = taskId ? String(taskId) : null;
+    const targetTab = (tId && tabs.find(t => t.taskId === tId || t.id === `agent-${tId}`)) || getActiveTab();
+    if (targetTab && targetTab.log) {
+      if (code === 0) {
+        targetTab.log.log(`${TAGS.dim('[AGENT]')} Task #${tId || 'proc'} ${TAGS.lime('completed successfully')}`);
+      } else {
+        targetTab.log.log(`${TAGS.dim('[AGENT]')} Task #${tId || 'proc'} ${TAGS.red(`exited with code ${code}${signal ? ` (${signal})` : ''}`)}`);
+      }
+      screen.render();
+    }
+  });
+
+  agentRunner.on('error', (event) => {
+    const { taskId, error } = event || {};
+    const tId = taskId ? String(taskId) : null;
+    const errMessage = error && error.message ? error.message : (error || 'Unknown error');
+    const targetTab = (tId && tabs.find(t => t.taskId === tId || t.id === `agent-${tId}`)) || getActiveTab();
+    if (targetTab && targetTab.log) {
+      targetTab.log.log(`${TAGS.red(`[AGENT ERROR] Task #${tId || 'proc'}: ${errMessage}`)}`);
+      screen.render();
+    }
+  });
 
   // 4b. Command / Prompt Input Box
   const inputContainer = blessed.box({
@@ -651,6 +766,74 @@ export function createCockpit(options = {}) {
       return;
     }
 
+    if (inputStr.startsWith('/agent ') || inputStr.startsWith('/agy ')) {
+      const prompt = inputStr.replace(/^\/(agent|agy)\s+/, '').trim();
+      if (prompt) {
+        const taskId = String(Date.now()).slice(-4);
+        intentBoard.addTask({ title: prompt, assignee: userName, status: 'in_progress' });
+        activeTab.log.log(`${TAGS.lime('[AGENT] Spawning agy agent for task')} #${taskId}...`);
+        try {
+          const tab = addAgentTab({ taskId, ownerId: userName });
+          const tabIndex = tabs.indexOf(tab);
+          if (tabIndex >= 0) {
+            switchTab(tabIndex);
+          }
+          agentRunner.spawnAgent({
+            taskId,
+            prompt,
+            ownerId: userName,
+            worktreePath: currentDir
+          });
+        } catch (err) {
+          activeTab.log.log(`${TAGS.red(`[SPAWN FAILED] ${err.message}`)}`);
+        }
+      }
+      setFocus(2);
+      return;
+    }
+
+    if (inputStr.startsWith('/terminate ') || inputStr.startsWith('/kill ')) {
+      const tId = inputStr.replace(/^\/(terminate|kill)\s+/, '').trim();
+      if (tId) {
+        try {
+          agentRunner.terminateAgent(tId, userName);
+          activeTab.log.log(`${TAGS.lime(`[TERMINATE] Terminated agent for task #${tId}`)}`);
+        } catch (err) {
+          activeTab.log.log(`${TAGS.red(`[TERMINATE ERROR] ${err.message}`)}`);
+        }
+      }
+      setFocus(2);
+      return;
+    }
+
+    if (inputStr.startsWith('/pause ')) {
+      const tId = inputStr.substring(7).trim();
+      if (tId) {
+        try {
+          agentRunner.pauseAgent(tId);
+          activeTab.log.log(`${TAGS.yellow(`[PAUSE] Paused agent for task #${tId}`)}`);
+        } catch (err) {
+          activeTab.log.log(`${TAGS.red(`[PAUSE ERROR] ${err.message}`)}`);
+        }
+      }
+      setFocus(2);
+      return;
+    }
+
+    if (inputStr.startsWith('/resume ')) {
+      const tId = inputStr.substring(8).trim();
+      if (tId) {
+        try {
+          agentRunner.resumeAgent(tId);
+          activeTab.log.log(`${TAGS.lime(`[RESUME] Resumed agent for task #${tId}`)}`);
+        } catch (err) {
+          activeTab.log.log(`${TAGS.red(`[RESUME ERROR] ${err.message}`)}`);
+        }
+      }
+      setFocus(2);
+      return;
+    }
+
     // Execute through spawnTerminalProcess
     spawnTerminalProcess(inputStr);
     setFocus(2);
@@ -739,6 +922,7 @@ export function createCockpit(options = {}) {
 
   function destroy() {
     lockManager.destroy();
+    agentRunner.destroy();
     tabs.forEach(t => {
       if (t.activeProc) {
         try {
@@ -773,6 +957,17 @@ export function createCockpit(options = {}) {
     footer,
     intentBoard,
     lockManager,
+    agentRunner,
+    addAgentTab,
+    spawnAgent: (opts) => {
+      const tab = addAgentTab(opts);
+      const agent = agentRunner.spawnAgent(opts);
+      tab.activeProc = agent.process;
+      return agent;
+    },
+    terminateAgent: (taskId, requesterId, signal) => agentRunner.terminateAgent(taskId, requesterId, signal),
+    pauseAgent: (taskId) => agentRunner.pauseAgent(taskId),
+    resumeAgent: (taskId) => agentRunner.resumeAgent(taskId),
     get tasks() {
       return intentBoard.getTasks();
     },
