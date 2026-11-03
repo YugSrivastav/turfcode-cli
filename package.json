@@ -4,7 +4,8 @@
   "type": "module",
   "description": "Real-time multiplayer AI coding cockpit in your terminal",
   "bin": {
-    "turf": "./bin/turf.js"
+    "turf": "./bin/turf.js",
+    "turfcode": "./bin/turf.js"
   },
   "scripts": {
     "test": "node --test test/*.test.js",

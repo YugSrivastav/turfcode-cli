@@ -47,3 +47,12 @@ test('runCLI join without room code returns error code 1', async () => {
   const joinExit = await runCLI(['node', 'turf', 'join', '--non-interactive']);
   assert.equal(joinExit, 1);
 });
+
+test('package.json defines bin entries for both turf and turfcode [MD-041]', async () => {
+  const fs = await import('fs');
+  const { fileURLToPath } = await import('url');
+  const pkgPath = fileURLToPath(new URL('../package.json', import.meta.url));
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+  assert.equal(pkg.bin.turf, './bin/turf.js');
+  assert.equal(pkg.bin.turfcode, './bin/turf.js');
+});

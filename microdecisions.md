@@ -324,3 +324,16 @@ All crewmates, contributors, and agents MUST adhere to these invariants when mod
 - **Resolution:** Mandatory upfront intent declaration. Before any agent can touch workspace files, it must declare its intent and the explicit sequence of files it plans to modify (e.g. `[1. src/models/user.ts -> 2. src/routes/auth.ts -> 3. test/auth.test.ts]`). TurfCode acquires an atomic lock on all files in the sequence before granting write permissions.
 - **Reason:** If an agent modifies file 1, and then tries to modify file 2 only to find file 2 is locked by another peer, the agent is left in a dirty, half-finished state. Atomic sequence locking eliminates partial-write deadlocks.
 - **Worker Invariant:** An agent process must acquire all sequence locks atomically before writing to its worktree. If any file in the sequence is held, the entire operation halts pre-flight.
+
+---
+
+## [MD-041] 2026-11-03: Two-Option CLI Interactive Launcher Flow with Live Hosting Folder Prompt & Session ID Disclosure
+- **Context:** Streamlining the terminal entry experience when a user executes `turfcode` or `turf` with zero arguments.
+- **The Fork:** Immediate cockpit boot on cwd with subcommands vs. Guided two-option interactive prompt (`[1] Create a Turf`, `[2] Join a Turf`) prompting for workspace folder and displaying generated Session ID.
+- **Resolution:** Option B: Guided two-option interactive prompt. When `turfcode` or `turf` is run without arguments in an interactive terminal, it renders:
+  `[1] Create a Turf`
+  `[2] Join a Turf`
+  `[3] Exit`
+  Choosing `[1] Create a Turf` prompts for the folder to live host (defaulting to current folder `.`). It validates and normalizes the folder path (resolves relative paths, strips surrounding quotes, expands directory if non-existent), generates the 6-character Session ID (e.g. `TURF-7A9B`), displays a clear visual banner with the Session ID and instructions to share it with collaborators, and boots the Electric Lime Cockpit hosting that folder.
+- **Reason:** Users downloading `turfcode` want zero friction to spin up a collaborative session without remembering subcommands. Explicitly prompting for the directory and displaying the Session ID upfront gives the host immediate confirmation of what is being hosted and what code to send to peers.
+- **Worker Invariant:** Both `turf` and `turfcode` binary symlinks must be defined in `package.json`. Interactive menu must strictly offer `[1] Create a Turf` and `[2] Join a Turf`, validate the input directory, and disclose the generated Session ID before cockpit initialization.

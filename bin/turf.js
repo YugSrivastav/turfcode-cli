@@ -3,8 +3,8 @@
 /**
  * TurfCode CLI - Executable Binary Entry Point
  * 
- * Maps to "bin": { "turf": "./bin/turf.js" } in package.json.
- * Complies with [MD-028], [MD-038].
+ * Maps to "bin": { "turf": "./bin/turf.js", "turfcode": "./bin/turf.js" } in package.json.
+ * Complies with [MD-028], [MD-038], [MD-041].
  */
 
 import { runCLI } from '../src/cli.js';

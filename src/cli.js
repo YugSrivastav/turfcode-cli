@@ -9,6 +9,7 @@
  * Adheres to [MD-006], [MD-025], [MD-038].
  */
 
+import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import readline from 'readline';
@@ -69,7 +70,8 @@ export function printHelp() {
 ${CHALK.limeBold('TURFCODE CLI')} — ${CHALK.text('Real-time multiplayer AI coding in the terminal')}
 
 ${CHALK.dim('USAGE:')}
-  ${CHALK.lime('turf')}                     ${CHALK.text('Open interactive launcher menu')}
+  ${CHALK.lime('turfcode')}                 ${CHALK.text('Open interactive launcher menu (Create or Join a Turf)')}
+  ${CHALK.lime('turf')}                     ${CHALK.text('Alias for turfcode')}
   ${CHALK.lime('turf host [dir]')}          ${CHALK.text('Host a shared Turf session in the given directory (default: .)')}
   ${CHALK.lime('turf join <id>')}           ${CHALK.text('Join an active Turf session using a 6-character room code')}
   ${CHALK.lime('turf --silent, -s')}        ${CHALK.text('Run in silent mode (mute ANSI \\x07 audio bell)')}
@@ -103,8 +105,8 @@ export function printSplash() {
 export async function promptInteractiveMenu() {
   printSplash();
 
-  console.log(`  ${CHALK.lime('[1]')} Host a Turf   ${CHALK.dim('(Start collaborative coding session)')}`);
-  console.log(`  ${CHALK.lime('[2]')} Join a Turf   ${CHALK.dim('(Connect to an active room code)')}`);
+  console.log(`  ${CHALK.lime('[1]')} Create a Turf   ${CHALK.dim('(Host a local folder / live session)')}`);
+  console.log(`  ${CHALK.lime('[2]')} Join a Turf     ${CHALK.dim('(Connect to an active room code)')}`);
   console.log(`  ${CHALK.dim('[3] Exit')}\n`);
 
   const rl = readline.createInterface({
@@ -116,12 +118,26 @@ export async function promptInteractiveMenu() {
     rl.question(CHALK.lime('  Select option [1-3]: '), (ans) => {
       const choice = ans.trim();
       if (choice === '1') {
-        rl.question(CHALK.lime('  Workspace directory [default: .]: '), (dir) => {
+        rl.question(CHALK.lime('  Enter folder to host [default: .]: '), (inputDir) => {
           rl.close();
-          resolve({ command: 'host', dir: dir.trim() || '.' });
+          const rawDir = inputDir.trim().replace(/^["']|["']$/g, '') || '.';
+          const resolvedDir = path.resolve(process.cwd(), rawDir);
+
+          if (!fs.existsSync(resolvedDir)) {
+            console.log(CHALK.amber(`\n  ⚠️  Notice: Directory "${resolvedDir}" does not exist. Creating it...`));
+            fs.mkdirSync(resolvedDir, { recursive: true });
+          }
+
+          const roomCode = generateRoomCode();
+
+          console.log('\n  ' + CHALK.limeBold('⚡ TURF CREATED: ') + CHALK.amberBold(roomCode));
+          console.log(CHALK.dim('  📂 Hosting Folder: ') + CHALK.cyan(resolvedDir));
+          console.log(CHALK.dim('  🔗 Share this Session ID with your collaborator to join!\n'));
+
+          resolve({ command: 'host', dir: resolvedDir, roomCode });
         });
       } else if (choice === '2') {
-        rl.question(CHALK.lime('  Enter Room Code (e.g. TURF-7A9B): '), (code) => {
+        rl.question(CHALK.lime('  Enter Session ID / Room Code (e.g. TURF-7A9B): '), (code) => {
           rl.close();
           resolve({ command: 'join', roomId: code.trim().toUpperCase() });
         });
@@ -149,6 +165,7 @@ export async function runCLI(argv = process.argv) {
   let command = parsed.command;
   let dir = parsed.dir;
   let roomId = parsed.roomId;
+  let interactiveRoomCode = null;
 
   if (!command) {
     if (parsed.nonInteractive || !process.stdout.isTTY) {
@@ -163,6 +180,7 @@ export async function runCLI(argv = process.argv) {
     command = selection.command;
     dir = selection.dir;
     roomId = selection.roomId;
+    interactiveRoomCode = selection.roomCode;
   }
 
   // Pre-flight validation
@@ -174,7 +192,7 @@ export async function runCLI(argv = process.argv) {
 
   if (command === 'host') {
     const targetDir = path.resolve(process.cwd(), dir || '.');
-    const roomCode = generateRoomCode();
+    const roomCode = interactiveRoomCode || generateRoomCode();
     const port = process.env.TURF_PORT ? parseInt(process.env.TURF_PORT, 10) : 0;
     const tunnelServer = new TunnelServer({
       cwd: targetDir,
