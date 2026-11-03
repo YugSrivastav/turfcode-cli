@@ -350,3 +350,16 @@ All crewmates, contributors, and agents MUST adhere to these invariants when mod
   4. **WSL Windows Path Normalization:** Implement `normalizeWorkspacePath` to seamlessly handle Windows drive paths pasted in WSL/Linux, preventing double `/mnt/c/mnt/c/...` path corruptions.
 - **Reason:** Herdr's spatial distribution succeeds because of clean typographic hierarchy and generous whitespace, rather than drawing heavy ASCII boxes inside boxes. Eliminating mockups ensures the cockpit reflects 100% genuine system state.
 - **Worker Invariant:** No hardcoded mock tasks or mock tabs. Sidebar sections must not nest bordered boxes inside `sidebar`. Input box must render as a sleek single-line prompt.
+
+---
+
+## [MD-043] 2026-11-03: Terminal Mouse Motion Leak Prevention & Input Sanitization
+- **Context:** Moving the mouse across the terminal window caused raw X10 coordinate sequences (e.g. `CF,CF-CF.CG.CG-CF-CG-CH...`) to be typed automatically into `inputBox`.
+- **The Fork:** Leave default blessed mouse configuration vs. Explicitly disable `allMotion` (`1003`) mouse movement tracking, disable mouse on `inputBox`, and sanitize raw escape sequences in the textbox listener.
+- **Resolution:** Explicitly disable all motion tracking and sanitize input.
+  1. Overrode `screen.program.enableMouse()` to enforce `allMotion: false` and `cellMotion: false`, sending `\x1b[?1003l\x1b[?1002l`. This instructs the terminal emulator (Windows Terminal / xterm) to only report explicit button clicks, never streaming unprompted mouse movement deltas into stdin.
+  2. Set `mouse: false` on `inputBox` and guarded `setFocus(2)` with `!inputBox._reading` to prevent stacked keypress listeners.
+  3. Added defense-in-depth sanitization to `inputBox._listener` to discard any escape codes or mouse sequence artifacts.
+  4. Sent clean mouse mode reset (`\x1b[?1003l\x1b[?1002l\x1b[?1000l`) on cockpit teardown.
+- **Reason:** In terminals supporting 24-bit TrueColor and SGR/X10 mouse reporting, any-event tracking (`1003`) produces thousands of coordinate packets per second. When packets arrive in chunks, the parser strips the escape header of the first packet, leaving trailing coordinate bytes in stdin where they get misinterpreted as keyboard strokes. Disabling movement tracking eliminates the issue at the hardware escape protocol level.
+- **Worker Invariant:** `allMotion` must never be enabled in cockpit mouse options. Textbox elements must not attach duplicate `readInput` listeners.

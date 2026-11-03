@@ -117,6 +117,27 @@ export function createCockpit(options = {}) {
     ...screenOptions
   });
 
+  // Disable allMotion / any-event mouse motion tracking (1003) [MD-043].
+  // Blessed enables 1003 by default which causes xterm / Windows Terminal to flood stdin
+  // with raw mouse movement coordinates (e.g. "CF,CF-CF..."), leaking into the input box.
+  if (screen.program) {
+    screen.program.enableMouse = function() {
+      return this.setMouse({
+        vt200Mouse: true,
+        sgrMouse: true,
+        allMotion: false,
+        cellMotion: false
+      }, true);
+    };
+    try {
+      screen.program.setMouse({
+        allMotion: false,
+        cellMotion: false
+      });
+      screen.program._twrite('\x1b[?1003l\x1b[?1002l');
+    } catch {}
+  }
+
   // 2. Top Header Bar (Herdr-style unified status strip)
   const header = blessed.box({
     parent: screen,
@@ -675,13 +696,25 @@ export function createCockpit(options = {}) {
     width: '100%-10',
     height: 1,
     keys: true,
-    mouse: true,
+    mouse: false,
     inputOnFocus: true,
     style: {
       fg: PALETTE.electricLime,
       bg: PALETTE.bg
     }
   });
+
+  // Defense-in-depth: sanitize input against stray mouse tracking / escape artifacts [MD-043]
+  const origTextboxListener = inputBox._listener;
+  inputBox._listener = function(ch, key) {
+    if (key && (key.name === 'mouse' || key.type === 'X10' || key.type === 'SGR' || key.name === 'undefined')) {
+      return;
+    }
+    if (ch && (ch.startsWith('\x1b') || ch === '\x1b')) {
+      return;
+    }
+    return origTextboxListener.call(this, ch, key);
+  };
 
   // 5. Bottom Footer Bar (Clean, understated keybinding reference)
   const footer = blessed.box({
@@ -719,7 +752,9 @@ export function createCockpit(options = {}) {
     } else {
       terminalPane.style.border.fg = PALETTE.activeBorder;
       inputBox.focus();
-      inputBox.readInput();
+      if (!inputBox._reading) {
+        inputBox.readInput();
+      }
     }
     screen.render();
   }
@@ -1180,7 +1215,6 @@ export function createCockpit(options = {}) {
   fileTreeBox.on('click', () => setFocus(0));
   terminalPane.on('click', () => setFocus(1));
   inputContainer.on('click', () => setFocus(2));
-  inputBox.on('click', () => setFocus(2));
 
   // Initialize UI content
   renderTasks();
@@ -1211,6 +1245,8 @@ export function createCockpit(options = {}) {
     });
     try {
       if (screen.program) {
+        screen.program.disableMouse();
+        screen.program._twrite('\x1b[?1003l\x1b[?1002l\x1b[?1000l');
         screen.program.destroy();
       }
       screen.destroy();

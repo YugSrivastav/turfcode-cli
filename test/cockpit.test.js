@@ -281,3 +281,29 @@ test('Cockpit triggers audio bell cues on agent completion and lock conflicts [M
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('Cockpit disables allMotion and rejects stray mouse escape artifacts [MD-043]', () => {
+  const cockpit = createCockpit({
+    roomCode: 'TURF-TEST',
+    screenOptions: { dump: false }
+  });
+
+  try {
+    assert.equal(cockpit.inputBox.options.mouse, false, 'inputBox must have mouse: false to prevent listener stacking');
+
+    // Simulate stray mouse keypress event
+    cockpit.inputBox.clearValue();
+    cockpit.inputBox._listener('C', { name: 'mouse', type: 'X10' });
+    assert.equal(cockpit.inputBox.value, '', 'Mouse event must not leak into inputBox');
+
+    cockpit.inputBox._listener('\x1b[MCF,', {});
+    assert.equal(cockpit.inputBox.value, '', 'ANSI escape sequence must not leak into inputBox');
+
+    // Legitimate keypress works
+    cockpit.inputBox._listener('h', { name: 'h' });
+    cockpit.inputBox._listener('i', { name: 'i' });
+    assert.equal(cockpit.inputBox.value, 'hi', 'Legitimate character input must work');
+  } finally {
+    cockpit.destroy();
+  }
+});
