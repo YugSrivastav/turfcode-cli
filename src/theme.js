@@ -43,7 +43,10 @@ export const CHALK = {
   text: chalk.hex(PALETTE.textBright),
   alertRed: chalk.hex(PALETTE.statusLocked),
   statusYellow: chalk.hex(PALETTE.statusProgress),
+  amber: chalk.hex(PALETTE.statusProgress),
+  amberBold: chalk.hex(PALETTE.statusProgress).bold,
   peerCyan: chalk.hex(PALETTE.statusPeer),
+  cyan: chalk.hex(PALETTE.statusPeer),
 };
 
 export const TAGS = {
