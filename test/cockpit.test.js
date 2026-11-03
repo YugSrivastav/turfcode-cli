@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
 import { createCockpit } from '../src/cockpit.js';
 
 test('Cockpit boots in non-interactive environment with 2-section layout', () => {
@@ -132,5 +135,47 @@ test('spawnTerminalProcess pipes stdout directly to terminal log without screen.
     assert.ok(found, `Output must appear in terminal log: ${JSON.stringify(logSpy)}`);
   } finally {
     cockpit.destroy();
+  }
+});
+
+test('Cockpit integrates IntentBoard and LockManager with live rendering in sidebar', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'turf-cockpit-test-'));
+  const cockpit = createCockpit({
+    roomCode: 'TURF-TEST',
+    cwd: tmpDir,
+    screenOptions: { dump: false }
+  });
+
+  try {
+    assert.ok(cockpit.intentBoard, 'IntentBoard must be mounted');
+    assert.ok(cockpit.lockManager, 'LockManager must be mounted');
+
+    // Acquire lock sequence
+    cockpit.acquireLock('Host', '1', ['src/server.js', 'src/router.js']);
+    const locksContent = cockpit.locksBox.getContent();
+    assert.ok(locksContent.includes('src/server.js'), 'Active lock must render in locksBox');
+    assert.ok(locksContent.includes('Host'), 'Holder must render in locksBox');
+
+    // Add a task
+    cockpit.addTask({
+      id: '99',
+      title: 'Build Atomic Lock Engine',
+      assignee: 'Host',
+      status: 'in_progress',
+      targetFiles: ['src/server.js']
+    });
+
+    const tasksContent = cockpit.tasksBox.getContent();
+    assert.ok(tasksContent.includes('Build Atomic Lock Engine'), 'Task must render in tasksBox');
+    assert.ok(tasksContent.includes('[IN PROGRESS]'), 'Status badge must render');
+    assert.ok(tasksContent.includes('[LOCKED BY HOST]'), 'Active lock indicator must render on task card');
+
+    // Release lock
+    cockpit.releaseLocks('1');
+    const updatedLocks = cockpit.locksBox.getContent();
+    assert.ok(updatedLocks.includes('(No active file locks - workspace free)'));
+  } finally {
+    cockpit.destroy();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
