@@ -12,6 +12,8 @@ import blessed from 'blessed';
 import { spawn } from 'child_process';
 import path from 'path';
 import { PALETTE, TAGS, BLESSED_STYLES } from './theme.js';
+import { LockManager } from './lock-manager.js';
+import { IntentBoard } from './intent-board.js';
 
 export function createCockpit(options = {}) {
   const {
@@ -23,7 +25,9 @@ export function createCockpit(options = {}) {
     initialTasks = [],
     initialLocks = [],
     initialPeers = [],
-    screenOptions = {}
+    screenOptions = {},
+    lockManager: customLockManager,
+    intentBoard: customIntentBoard
   } = options;
 
   let currentDir = cwd;
@@ -31,14 +35,24 @@ export function createCockpit(options = {}) {
   let focusIndex = 2; // 0: Sidebar, 1: Terminal Log, 2: Input Box (default focused)
   let activeTabIndex = 0;
 
-  // Initialize State
-  const tasks = initialTasks.length > 0 ? [...initialTasks] : [
-    { id: '1', title: 'Initialize Electric Lime Cockpit', assignee: userName, status: 'in_progress' },
-    { id: '2', title: 'Connect Tunnel & Lock Manager', assignee: 'Team', status: 'queued' },
-    { id: '0', title: 'Repository & Architecture Spec', assignee: 'Yug', status: 'done' }
+  // Initialize Lock Manager & Intent Board
+  const lockManager = customLockManager || new LockManager({
+    cwd: currentDir,
+    initialLocks: initialLocks.length > 0 ? initialLocks : undefined,
+    autoStartMonitor: true
+  });
+
+  const defaultInitialTasks = initialTasks.length > 0 ? initialTasks : [
+    { id: '1', title: 'Initialize Electric Lime Cockpit', assignee: userName, status: 'in_progress', targetFiles: [] },
+    { id: '2', title: 'Connect Tunnel & Lock Manager', assignee: 'Team', status: 'queued', targetFiles: [] },
+    { id: '0', title: 'Repository & Architecture Spec', assignee: 'Yug', status: 'done', targetFiles: [] }
   ];
 
-  const locks = initialLocks.length > 0 ? [...initialLocks] : [];
+  const intentBoard = customIntentBoard || new IntentBoard({
+    cwd: currentDir,
+    lockManager,
+    initialTasks: defaultInitialTasks
+  });
 
   const peers = initialPeers.length > 0 ? [...initialPeers] : [
     { name: userName, role: role, isSelf: true }
@@ -100,14 +114,13 @@ export function createCockpit(options = {}) {
   });
 
   function renderTasks() {
-    if (!tasks || tasks.length === 0) {
+    const currentTasks = intentBoard.getTasks();
+    const currentLocks = lockManager.getLocks();
+    if (!currentTasks || currentTasks.length === 0) {
       tasksBox.setContent(`\n ${TAGS.dim('(No tasks in intent queue)')}`);
       return;
     }
-    const lines = tasks.map(t => {
-      const badge = TAGS.badge(t.status.toUpperCase().replace('_', ' '), t.status);
-      return ` ${badge} {#f0fff0-fg}#${t.id}: ${t.title}{/#f0fff0-fg}\n   ${TAGS.dim(`↳ Assignee: ${t.assignee}`)}`;
-    });
+    const lines = currentTasks.map(t => intentBoard.formatTaskCard(t, currentLocks));
     tasksBox.setContent(lines.join('\n\n'));
   }
 
@@ -131,15 +144,31 @@ export function createCockpit(options = {}) {
   });
 
   function renderLocks() {
-    if (!locks || locks.length === 0) {
+    const currentLocks = lockManager.getLocks();
+    if (!currentLocks || currentLocks.length === 0) {
       locksBox.setContent(`\n ${TAGS.dim('(No active file locks - workspace free)')}`);
       return;
     }
-    const lines = locks.map(l => {
-      return ` {#ef4444-fg}🔒 ${l.file}{/#ef4444-fg} ${TAGS.dim(`[Held by ${l.holder}]`)}`;
+    const lines = currentLocks.map(l => {
+      const holder = l.ownerId || l.holder || 'unknown';
+      const fPath = l.filePath || l.file;
+      return ` {#ef4444-fg}🔒 ${fPath}{/#ef4444-fg} ${TAGS.dim(`[Held by ${holder}]`)}`;
     });
     locksBox.setContent(lines.join('\n'));
   }
+
+  // Live synchronizer between state and TUI
+  intentBoard.on('change', () => {
+    renderTasks();
+    renderLocks();
+    screen.render();
+  });
+
+  lockManager.on('change', () => {
+    renderLocks();
+    renderTasks();
+    screen.render();
+  });
 
   // 3c. Connected Peers Container
   const peersBox = blessed.box({
@@ -561,6 +590,67 @@ export function createCockpit(options = {}) {
       return;
     }
 
+    if (inputStr.startsWith('/task add ')) {
+      const title = inputStr.substring(10).trim();
+      if (title) {
+        const added = intentBoard.addTask({ title, assignee: userName, status: 'queued' });
+        activeTab.log.log(`${TAGS.lime('[INTENT] Added task')} #${added.id}: ${added.title}`);
+      }
+      setFocus(2);
+      return;
+    }
+
+    if (inputStr.startsWith('/task done ')) {
+      const tId = inputStr.substring(11).trim();
+      if (tId) {
+        intentBoard.updateTask(tId, { status: 'done' });
+        lockManager.releaseLocks(tId);
+        activeTab.log.log(`${TAGS.lime('[INTENT] Task')} #${tId} ${TAGS.lime('completed and locks released')}`);
+      }
+      setFocus(2);
+      return;
+    }
+
+    if (inputStr.startsWith('/lock ')) {
+      const parts = inputStr.substring(6).trim().split(/\s+/);
+      const tId = parts[0];
+      const files = parts.slice(1);
+      if (tId && files.length > 0) {
+        const res = lockManager.acquireAtomicSequence(userName, tId, files);
+        if (res.success) {
+          activeTab.log.log(`${TAGS.lime(`[LOCK ACQUIRED] Task #${tId} locked ${files.length} file(s)`)}`);
+        } else {
+          activeTab.log.log(`${TAGS.red(res.error || `[LOCK CONFLICT] Cannot lock ${res.conflictFile}`)}`);
+        }
+      }
+      setFocus(2);
+      return;
+    }
+
+    if (inputStr.startsWith('/unlock ')) {
+      const tId = inputStr.substring(8).trim();
+      if (tId) {
+        const res = lockManager.releaseLocks(tId);
+        activeTab.log.log(`${TAGS.lime(`[LOCKS RELEASED] Released ${res.released.length} file(s) for task #${tId}`)}`);
+      }
+      setFocus(2);
+      return;
+    }
+
+    if (inputStr.startsWith('/force-unlock ')) {
+      const file = inputStr.substring(14).trim();
+      if (file) {
+        const res = lockManager.forceUnlock(file);
+        if (res.success) {
+          activeTab.log.log(`${TAGS.lime(`[FORCE UNLOCKED] Manually broke lock on ${file}`)}`);
+        } else {
+          activeTab.log.log(`${TAGS.dim(`[UNLOCK] File was not locked: ${file}`)}`);
+        }
+      }
+      setFocus(2);
+      return;
+    }
+
     // Execute through spawnTerminalProcess
     spawnTerminalProcess(inputStr);
     setFocus(2);
@@ -648,6 +738,7 @@ export function createCockpit(options = {}) {
   setFocus(2);
 
   function destroy() {
+    lockManager.destroy();
     tabs.forEach(t => {
       if (t.activeProc) {
         try {
@@ -680,8 +771,14 @@ export function createCockpit(options = {}) {
     inputContainer,
     inputBox,
     footer,
-    tasks,
-    locks,
+    intentBoard,
+    lockManager,
+    get tasks() {
+      return intentBoard.getTasks();
+    },
+    get locks() {
+      return lockManager.getLocks();
+    },
     peers,
     get isSidebarCollapsed() {
       return isSidebarCollapsed;
@@ -701,6 +798,11 @@ export function createCockpit(options = {}) {
     renderLocks,
     renderPeers,
     renderTabs,
+    addTask: (task) => intentBoard.addTask(task),
+    updateTask: (tId, updates) => intentBoard.updateTask(tId, updates),
+    acquireLock: (ownerId, tId, files, opts) => lockManager.acquireAtomicSequence(ownerId, tId, files, opts),
+    releaseLocks: (tId) => lockManager.releaseLocks(tId),
+    forceUnlock: (fPath) => lockManager.forceUnlock(fPath),
     destroy
   };
 }
