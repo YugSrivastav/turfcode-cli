@@ -6,6 +6,7 @@ members = [
     "crates/turf-protocol",
     "crates/turf-core",
     "crates/turf-tui",
+    "crates/turf-net",
 ]
 
 [workspace.package]
