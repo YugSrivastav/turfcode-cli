@@ -179,3 +179,99 @@ test('Cockpit integrates IntentBoard and LockManager with live rendering in side
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('Cockpit toggles File Tree in Intent Board via [F] / toggleFileTree() [MD-027]', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'turf-cockpit-tree-'));
+  const cockpit = createCockpit({
+    roomCode: 'TURF-TEST',
+    cwd: tmpDir,
+    screenOptions: { dump: false }
+  });
+
+  try {
+    assert.equal(cockpit.isFileTreeVisible, false, 'File tree starts hidden');
+    assert.equal(cockpit.fileTreeBox.hidden, true);
+    assert.equal(cockpit.tasksBox.hidden, false);
+
+    // Toggle on (press [F])
+    cockpit.toggleFileTree();
+    assert.equal(cockpit.isFileTreeVisible, true, 'File tree becomes visible');
+    assert.equal(cockpit.fileTreeBox.hidden, false);
+    assert.equal(cockpit.tasksBox.hidden, true);
+
+    // Toggle off (press [F] again)
+    cockpit.toggleFileTree();
+    assert.equal(cockpit.isFileTreeVisible, false, 'File tree hides');
+    assert.equal(cockpit.fileTreeBox.hidden, true);
+    assert.equal(cockpit.tasksBox.hidden, false);
+  } finally {
+    cockpit.destroy();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Cockpit opens dedicated DiffViewer tab via [D] / openDiffTab() [MD-016]', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'turf-cockpit-diff-'));
+  const cockpit = createCockpit({
+    roomCode: 'TURF-TEST',
+    cwd: tmpDir,
+    screenOptions: { dump: false }
+  });
+
+  try {
+    const initialTabsCount = cockpit.tabs.length;
+    const diffTab = await cockpit.openDiffTab();
+
+    assert.ok(diffTab, 'Diff tab must be created and returned');
+    assert.equal(diffTab.id, 'diff-viewer');
+    assert.equal(cockpit.activeTabIndex, cockpit.tabs.indexOf(diffTab));
+    assert.equal(cockpit.tabs.length, initialTabsCount + 1);
+
+    // Re-opening diff tab reuses existing tab and refreshes
+    const secondCall = await cockpit.openDiffTab();
+    assert.equal(secondCall, diffTab);
+    assert.equal(cockpit.tabs.length, initialTabsCount + 1);
+  } finally {
+    cockpit.destroy();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Cockpit triggers audio bell cues on agent completion and lock conflicts [MD-034]', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'turf-cockpit-bell-'));
+  let bellEvents = [];
+  const mockStream = {
+    write: (data) => {
+      bellEvents.push(data);
+    }
+  };
+
+  const cockpit = createCockpit({
+    roomCode: 'TURF-TEST',
+    cwd: tmpDir,
+    screenOptions: { dump: false },
+    silent: false
+  });
+  cockpit.bell.outputStream = mockStream;
+
+  try {
+    // 1. Lock conflict triggers bell
+    cockpit.acquireLock('Yug', 'task-1', ['file1.js']);
+    // Attempt conflicting lock
+    cockpit.acquireLock('Ayush', 'task-2', ['file1.js']);
+
+    assert.ok(bellEvents.length >= 1, 'Lock conflict must ring bell');
+    assert.equal(bellEvents[0], '\x07');
+
+    // 2. Task completion via intentBoard / agentRunner triggers bell
+    cockpit.bell.clearHistory();
+    bellEvents = [];
+
+    cockpit.agentRunner.emit('exit', { taskId: 'task-1', code: 0 });
+    assert.ok(bellEvents.length >= 1, 'Agent success exit must ring bell');
+    assert.equal(bellEvents[0], '\x07');
+  } finally {
+    cockpit.destroy();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

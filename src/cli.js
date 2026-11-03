@@ -31,7 +31,8 @@ export function parseArgs(rawArgs) {
     roomId: null,
     help: false,
     version: false,
-    nonInteractive: false
+    nonInteractive: false,
+    silent: false
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -43,6 +44,8 @@ export function parseArgs(rawArgs) {
       result.version = true;
     } else if (arg === '--non-interactive') {
       result.nonInteractive = true;
+    } else if (arg === '--silent' || arg === '-s') {
+      result.silent = true;
     } else if (arg === 'host') {
       result.command = 'host';
       if (args[i + 1] && !args[i + 1].startsWith('-')) {
@@ -69,11 +72,14 @@ ${CHALK.dim('USAGE:')}
   ${CHALK.lime('turf')}                     ${CHALK.text('Open interactive launcher menu')}
   ${CHALK.lime('turf host [dir]')}          ${CHALK.text('Host a shared Turf session in the given directory (default: .)')}
   ${CHALK.lime('turf join <id>')}           ${CHALK.text('Join an active Turf session using a 6-character room code')}
+  ${CHALK.lime('turf --silent, -s')}        ${CHALK.text('Run in silent mode (mute ANSI \\x07 audio bell)')}
   ${CHALK.lime('turf --help, -h')}          ${CHALK.text('Show this help information')}
   ${CHALK.lime('turf --version, -v')}       ${CHALK.text('Show version')}
 
 ${CHALK.dim('NAVIGATION KEYBINDINGS:')}
   ${CHALK.lime('[Tab]')}                    ${CHALK.text('Cycle focus: Intent Board ⇄ Terminal Pane ⇄ Input Box')}
+  ${CHALK.lime('[D]')}                      ${CHALK.text('Open live colorized git diff viewer')}
+  ${CHALK.lime('[F]')}                      ${CHALK.text('Toggle workspace file tree in Intent Board')}
   ${CHALK.lime('[Ctrl+B]')}                 ${CHALK.text('Toggle Intent Board sidebar collapsed (4 cols) / expanded (30%)')}
   ${CHALK.lime('[Ctrl+1..9]')}              ${CHALK.text('Switch active terminal tabs')}
   ${CHALK.lime('[Ctrl+C]')}                 ${CHALK.text('Clear input box / Interrupt active process')}
@@ -191,7 +197,8 @@ export async function runCLI(argv = process.argv) {
       tunnelServer,
       tunnelUrl: serverInfo?.tunnelUrl,
       userName: process.env.USER || 'Host',
-      role: 'Host'
+      role: 'Host',
+      silent: parsed.silent
     });
     return 0;
   }
@@ -226,7 +233,8 @@ export async function runCLI(argv = process.argv) {
       roomCode: cleanRoom,
       client,
       userName: process.env.USER || 'Peer',
-      role: 'Peer'
+      role: 'Peer',
+      silent: parsed.silent
     });
     return 0;
   }

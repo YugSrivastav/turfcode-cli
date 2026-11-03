@@ -17,6 +17,12 @@ test('CLI parseArgs handles subcommands and flags', () => {
 
   const versionArgs = parseArgs(['node', 'turf', '-v']);
   assert.equal(versionArgs.version, true);
+
+  const silentArgs = parseArgs(['node', 'turf', 'host', '--silent']);
+  assert.equal(silentArgs.silent, true);
+
+  const silentShortArgs = parseArgs(['node', 'turf', '-s']);
+  assert.equal(silentShortArgs.silent, true);
 });
 
 test('generateRoomCode produces 6-character TURF-XXXX room codes', () => {
