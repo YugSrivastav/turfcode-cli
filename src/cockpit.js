@@ -15,6 +15,10 @@ import { PALETTE, TAGS, BLESSED_STYLES } from './theme.js';
 import { LockManager } from './lock-manager.js';
 import { IntentBoard } from './intent-board.js';
 import { AgentRunner } from './agent-runner.js';
+import { DiffViewer } from './diff-viewer.js';
+import { FileTree } from './file-tree.js';
+import { AudioBell } from './bell.js';
+import { selfHeal, recordSessionStart, recordSessionExit } from './self-heal.js';
 
 export function createCockpit(options = {}) {
   const {
@@ -27,24 +31,57 @@ export function createCockpit(options = {}) {
     initialLocks = [],
     initialPeers = [],
     screenOptions = {},
+    silent = false,
     lockManager: customLockManager,
     intentBoard: customIntentBoard,
     agentRunner: customAgentRunner,
     tunnelServer = null,
     tunnelUrl = null,
-    client = null
+    client = null,
+    bell: customBell,
+    diffViewer: customDiffViewer,
+    fileTree: customFileTree
   } = options;
 
   let currentDir = cwd;
   let isSidebarCollapsed = false;
+  let isFileTreeVisible = false;
   let focusIndex = 2; // 0: Sidebar, 1: Terminal Log, 2: Input Box (default focused)
   let activeTabIndex = 0;
+
+  // Boot Self-Healing [MD-036]
+  const recoveryResult = selfHeal({
+    cwd: currentDir,
+    silent: silent,
+    lockManager: customLockManager
+  });
+  recordSessionStart({ cwd: currentDir, roomCode });
+
+  // Initialize Audio Bell [MD-034]
+  const bell = customBell || new AudioBell({ silent });
 
   // Initialize Lock Manager & Intent Board
   const lockManager = customLockManager || new LockManager({
     cwd: currentDir,
     initialLocks: initialLocks.length > 0 ? initialLocks : undefined,
     autoStartMonitor: true
+  });
+
+  // Listen for lock conflicts on LockManager and trigger bell [MD-034]
+  lockManager.on('conflict', (data) => {
+    bell.onLockConflict(data);
+  });
+
+  // Initialize File Tree & Diff Viewer [MD-016], [MD-027]
+  const fileTree = customFileTree || new FileTree({
+    cwd: currentDir,
+    lockManager,
+    format: 'tags'
+  });
+
+  const diffViewer = customDiffViewer || new DiffViewer({
+    cwd: currentDir,
+    format: 'tags'
   });
 
   const defaultInitialTasks = initialTasks.length > 0 ? initialTasks : [
@@ -167,16 +204,74 @@ export function createCockpit(options = {}) {
     locksBox.setContent(lines.join('\n'));
   }
 
+  // 3b-alt. Interactive File Tree with Padlock Badges [MD-027]
+  const fileTreeBox = blessed.box({
+    parent: sidebar,
+    top: 0,
+    left: 0,
+    width: '100%',
+    height: '76%',
+    label: ` {bold}{#39ff14-fg}📁 WORKSPACE FILE TREE [F]{/#39ff14-fg}{/bold} `,
+    border: { type: 'line', fg: PALETTE.mutedBorder },
+    tags: true,
+    scrollable: true,
+    alwaysScroll: true,
+    mouse: true,
+    keys: true,
+    vi: true,
+    hidden: true,
+    style: {
+      fg: PALETTE.textBright,
+      bg: PALETTE.bg,
+      border: { fg: PALETTE.mutedBorder }
+    }
+  });
+
+  function renderFileTree() {
+    fileTree.renderToBox(fileTreeBox);
+  }
+
+  function toggleFileTree() {
+    isFileTreeVisible = !isFileTreeVisible;
+    if (isFileTreeVisible) {
+      tasksBox.hide();
+      locksBox.hide();
+      fileTreeBox.show();
+      renderFileTree();
+      if (focusIndex === 0) {
+        fileTreeBox.focus();
+      }
+    } else {
+      fileTreeBox.hide();
+      tasksBox.show();
+      locksBox.show();
+      renderTasks();
+      renderLocks();
+      if (focusIndex === 0) {
+        tasksBox.focus();
+      }
+    }
+    screen.render();
+  }
+
   // Live synchronizer between state and TUI
   intentBoard.on('change', () => {
-    renderTasks();
-    renderLocks();
+    if (isFileTreeVisible) {
+      renderFileTree();
+    } else {
+      renderTasks();
+      renderLocks();
+    }
     screen.render();
   });
 
   lockManager.on('change', () => {
-    renderLocks();
-    renderTasks();
+    if (isFileTreeVisible) {
+      renderFileTree();
+    } else {
+      renderLocks();
+      renderTasks();
+    }
     screen.render();
   });
 
@@ -379,8 +474,71 @@ export function createCockpit(options = {}) {
     log.log(`{#1b3b1b-fg}│{/#1b3b1b-fg}  {bold}{#39ff14-fg}TURFCODE ELECTRIC LIME COCKPIT v0.1.0{/#39ff14-fg}{/bold} — {#22c55e-fg}READY{/#22c55e-fg}             {#1b3b1b-fg}│{/#1b3b1b-fg}`);
     log.log(`{#1b3b1b-fg}│{/#1b3b1b-fg}  Session: {#eab308-fg}${roomCode}{/#eab308-fg}  │ Mode: {#39ff14-fg}${mode.toUpperCase()}{/#39ff14-fg}  │ Directory: {#4a7c4a-fg}${currentDir}{/#4a7c4a-fg} {#1b3b1b-fg}│{/#1b3b1b-fg}`);
     log.log(`{#1b3b1b-fg}│{/#1b3b1b-fg}  Multi-Agent Terminal: Parallel execution without screen wipe {#1b3b1b-fg}│{/#1b3b1b-fg}`);
-    log.log(`{#1b3b1b-fg}│{/#1b3b1b-fg}  [Ctrl+B] Toggle Sidebar │ [Ctrl+1..9] Tabs │ [Tab] Focus    {#1b3b1b-fg}│{/#1b3b1b-fg}`);
+    log.log(`{#1b3b1b-fg}│{/#1b3b1b-fg}  [D] Diff │ [F] Files │ [Ctrl+B] Sidebar │ [Tab] Focus     {#1b3b1b-fg}│{/#1b3b1b-fg}`);
     log.log(`{#1b3b1b-fg}└─────────────────────────────────────────────────────────────┘{/#1b3b1b-fg}\n`);
+    if (recoveryResult && recoveryResult.recovered) {
+      log.log(`${TAGS.limeBold('[SELF-HEALING]')} ${TAGS.yellow(recoveryResult.notice)}\n`);
+    }
+  }
+
+  let diffTab = null;
+
+  /**
+   * Open or switch to dedicated Diff Viewer tab in the right pane [MD-016]
+   * @returns {Promise<Object>} Diff tab object
+   */
+  async function openDiffTab() {
+    let existingIndex = tabs.findIndex(t => t.id === 'diff-viewer');
+    if (existingIndex === -1) {
+      const log = blessed.log({
+        parent: terminalPane,
+        top: 1,
+        left: 0,
+        width: '100%-2',
+        height: '100%-5',
+        scrollable: true,
+        alwaysScroll: true,
+        tags: true,
+        keys: true,
+        vi: true,
+        mouse: true,
+        hidden: true,
+        style: {
+          fg: PALETTE.textBright,
+          bg: PALETTE.bg
+        }
+      });
+
+      diffTab = {
+        id: 'diff-viewer',
+        name: 'D: Diff',
+        log,
+        activeProc: null,
+        history: []
+      };
+
+      tabs.push(diffTab);
+      existingIndex = tabs.length - 1;
+      renderTabs();
+    } else {
+      diffTab = tabs[existingIndex];
+    }
+
+    switchTab(existingIndex);
+
+    diffTab.log.setContent('');
+    diffTab.log.log(`{#06b6d4-fg}=== TURFCODE LIVE GIT DIFF INSPECTION [MD-016] ==={/#06b6d4-fg}`);
+    diffTab.log.log(`${TAGS.dim('Additions: {#39ff14-fg}+green{/#39ff14-fg} │ Deletions: {#ff3333-fg}-red{/#ff3333-fg} │ Headers: {#06b6d4-fg}cyan{/#06b6d4-fg}')}\n`);
+
+    try {
+      const res = await diffViewer.getUncommittedDiff();
+      diffTab.log.log(res.colorized);
+    } catch (err) {
+      diffTab.log.log(`${TAGS.red(`[DIFF ERROR] ${err.message}`)}`);
+    }
+
+    screen.render();
+    return diffTab;
   }
 
   /**
@@ -472,6 +630,7 @@ export function createCockpit(options = {}) {
     const targetTab = (tId && tabs.find(t => t.taskId === tId || t.id === `agent-${tId}`)) || getActiveTab();
     if (targetTab && targetTab.log) {
       if (code === 0) {
+        bell.onTaskCompletion(tId);
         targetTab.log.log(`${TAGS.dim('[AGENT]')} Task #${tId || 'proc'} ${TAGS.lime('completed successfully')}`);
       } else {
         targetTab.log.log(`${TAGS.dim('[AGENT]')} Task #${tId || 'proc'} ${TAGS.red(`exited with code ${code}${signal ? ` (${signal})` : ''}`)}`);
@@ -536,7 +695,7 @@ export function createCockpit(options = {}) {
   const footer = blessed.box({
     parent: screen,
     ...BLESSED_STYLES.footer,
-    content: ` {bold}{#39ff14-fg}[Tab]{/#39ff14-fg}{/bold} Focus │ {bold}{#39ff14-fg}[Ctrl+B]{/#39ff14-fg}{/bold} Sidebar │ {bold}{#39ff14-fg}[Ctrl+1..9]{/#39ff14-fg}{/bold} Tabs │ {bold}{#39ff14-fg}[Ctrl+C]{/#39ff14-fg}{/bold} Clear │ {bold}{#39ff14-fg}[Enter]{/#39ff14-fg}{/bold} Run `
+    content: ` {bold}{#39ff14-fg}[Tab]{/#39ff14-fg}{/bold} Focus │ {bold}{#39ff14-fg}[D]{/#39ff14-fg}{/bold} Diff │ {bold}{#39ff14-fg}[F]{/#39ff14-fg}{/bold} Files │ {bold}{#39ff14-fg}[Ctrl+B]{/#39ff14-fg}{/bold} Sidebar │ {bold}{#39ff14-fg}[Ctrl+1..9]{/#39ff14-fg}{/bold} Tabs `
   });
 
   // Helper: Get Active Tab & Log
@@ -554,13 +713,19 @@ export function createCockpit(options = {}) {
 
     // Reset all borders to muted
     tasksBox.style.border.fg = PALETTE.mutedBorder;
+    fileTreeBox.style.border.fg = PALETTE.mutedBorder;
     terminalPane.style.border.fg = PALETTE.mutedBorder;
     inputContainer.style.border.fg = PALETTE.mutedBorder;
 
     if (focusIndex === 0) {
-      // Focus Sidebar (Intent Board)
-      tasksBox.style.border.fg = PALETTE.activeBorder;
-      tasksBox.focus();
+      // Focus Sidebar (Intent Board or File Tree)
+      if (isFileTreeVisible) {
+        fileTreeBox.style.border.fg = PALETTE.activeBorder;
+        fileTreeBox.focus();
+      } else {
+        tasksBox.style.border.fg = PALETTE.activeBorder;
+        tasksBox.focus();
+      }
     } else if (focusIndex === 1) {
       // Focus Terminal Log
       terminalPane.style.border.fg = PALETTE.activeBorder;
@@ -586,6 +751,7 @@ export function createCockpit(options = {}) {
       sidebar.width = 4;
       tasksBox.hide();
       locksBox.hide();
+      fileTreeBox.hide();
       peersBox.hide();
       collapseBtn.top = 0;
       collapseBtn.height = '100%-2';
@@ -594,8 +760,15 @@ export function createCockpit(options = {}) {
       terminalPane.width = '100%-4';
     } else {
       sidebar.width = '30%';
-      tasksBox.show();
-      locksBox.show();
+      if (isFileTreeVisible) {
+        fileTreeBox.show();
+        tasksBox.hide();
+        locksBox.hide();
+      } else {
+        fileTreeBox.hide();
+        tasksBox.show();
+        locksBox.show();
+      }
       peersBox.show();
       collapseBtn.top = undefined;
       collapseBtn.bottom = 0;
@@ -759,6 +932,18 @@ export function createCockpit(options = {}) {
       return;
     }
 
+    if (inputStr === '/diff' || inputStr === '/d') {
+      openDiffTab();
+      setFocus(2);
+      return;
+    }
+
+    if (inputStr === '/tree' || inputStr === '/files' || inputStr === '/filetree' || inputStr === '/f') {
+      toggleFileTree();
+      setFocus(2);
+      return;
+    }
+
     if (inputStr.startsWith('/task add ')) {
       const title = inputStr.substring(10).trim();
       if (title) {
@@ -784,6 +969,7 @@ export function createCockpit(options = {}) {
         } else {
           intentBoard.updateTask(tId, { status: 'done' });
           lockManager.releaseLocks(tId);
+          bell.onTaskCompletion(tId);
           activeTab.log.log(`${TAGS.lime('[INTENT] Task')} #${tId} ${TAGS.lime('completed and locks released')}`);
         }
       }
@@ -804,6 +990,7 @@ export function createCockpit(options = {}) {
           if (res.success) {
             activeTab.log.log(`${TAGS.lime(`[LOCK ACQUIRED] Task #${tId} locked ${files.length} file(s)`)}`);
           } else {
+            bell.onLockConflict(res.conflictFile || res.error);
             activeTab.log.log(`${TAGS.red(res.error || `[LOCK CONFLICT] Cannot lock ${res.conflictFile}`)}`);
           }
         }
@@ -986,8 +1173,23 @@ export function createCockpit(options = {}) {
     setFocus(2);
   });
 
+  // 5. [D]: Open Diff Viewer tab in right pane [MD-016]
+  screen.key(['d', 'D'], () => {
+    if (focusIndex !== 2) {
+      openDiffTab();
+    }
+  });
+
+  // 6. [F]: Toggle File Tree navigation in Intent Board [MD-027]
+  screen.key(['f', 'F'], () => {
+    if (focusIndex !== 2) {
+      toggleFileTree();
+    }
+  });
+
   // Click handlers for mouse navigation
   tasksBox.on('click', () => setFocus(0));
+  fileTreeBox.on('click', () => setFocus(0));
   terminalPane.on('click', () => setFocus(1));
   inputContainer.on('click', () => setFocus(2));
   inputBox.on('click', () => setFocus(2));
@@ -1009,6 +1211,7 @@ export function createCockpit(options = {}) {
     if (client && typeof client.disconnect === 'function') {
       client.disconnect();
     }
+    recordSessionExit({ cwd: currentDir, cleanExit: true });
     lockManager.destroy();
     agentRunner.destroy();
     tabs.forEach(t => {
@@ -1035,6 +1238,7 @@ export function createCockpit(options = {}) {
     sidebar,
     tasksBox,
     locksBox,
+    fileTreeBox,
     peersBox,
     collapseBtn,
     terminalPane,
@@ -1046,6 +1250,15 @@ export function createCockpit(options = {}) {
     intentBoard,
     lockManager,
     agentRunner,
+    bell,
+    diffViewer,
+    fileTree,
+    get isFileTreeVisible() {
+      return isFileTreeVisible;
+    },
+    toggleFileTree,
+    openDiffTab,
+    selfHealResult: recoveryResult,
     addAgentTab,
     spawnAgent: (opts) => {
       const tab = addAgentTab(opts);
