@@ -430,4 +430,35 @@ All crewmates, contributors, and agents MUST adhere to these invariants when mod
 - **Reason:** Native Rust gives zero garbage collection latency, microsecond ANSI dispatch, precise ConPTY/POSIX terminal semantics, and complete immunity to node-pty memory bloat or Blessed screen redraw artifacts.
 - **Worker Invariant:** `turf-pty` must maintain non-blocking channel streaming safe for both synchronous threads and asynchronous Tokio runtimes. `turf-vte` must correctly preserve primary buffer state when toggling alternate screen buffers.
 
+---
+
+## [MD-047] 2026-11-03: Herdr-Grade Ratatui Spatial Multiplexer Cockpit: Borderless Panes, Electric Lime Pill Tabs, and 60fps VTE Frame Blitter
+- **Context:** Delivering the pristine, lightning-fast terminal experience demanded by the Captain requires replacing heavy boxed widgets and Node.js wrappers with a native Rust Ratatui cockpit inspired directly by Herdr's spatial layout architecture.
+- **The Fork:** Keep nested boxed containers and Blessed/Node rendering vs. Implement `crates/turf-tui` in Ratatui 0.29 + Crossterm 0.28 with borderless terminal panes, solid Electric Lime pill tab strips, a full-height single-divider sidebar, and a 60fps flicker-free VTE-to-Ratatui cell blitter.
+- **Resolution:** Implemented `crates/turf-tui` in the Cargo workspace with:
+  1. **Herdr Spatial Layout Engine (`CockpitLayout`):**
+     - **Full-Height Borderless Sidebar (Left, ~22% width):** Bounded proportionally (22% clamped to min 22 cols) and separated from the main surface by a single vertical divider line (`│`, `COLOR_MUTED_BORDER`). Features 4 borderless typographic sections (`SPACES`, `INTENTS & TASKS`, `ACTIVE LOCKS`, `PEERS`) separated by subtle single horizontal rules (`─`).
+     - **Unified Tab Strip (Top Row):** Row 0 renders active tab as an inverted high-contrast Electric Lime pill (` 1: Shell `) in `COLOR_ELECTRIC_LIME` background and `COLOR_BG` foreground with bold styling, followed by `+`, and right-aligned session metadata (`● TURF-XXXX • HOST • user`).
+     - **Borderless Terminal Surface:** Direct 2D cell blitting from `turf-vte::ScreenBuffer` into Ratatui frame buffers without surrounding box frames. Supports binary space partition (BSP) split panes (vertical `│` and horizontal `─` splits).
+     - **Understated Input Bar (Bottom Row):** Single-line prompt (`turf > `) separated from terminal output above by a subtle single `─` divider line, with right-aligned keybinding shortcuts (`[Tab] Focus`, `[Ctrl+B] Sidebar`, `[Ctrl+T] Tab`, `[Ctrl+S] Split`, `[Ctrl+Q] Quit`).
+  2. **Zero-Flicker 60fps Cell Blitter (`vte_blit`):**
+     - Zero heap allocations during blit: maps `turf_vte::Cell` directly into Ratatui `Buffer` cells with full SGR flag mapping (bold, dim, italic, underline, reverse, strike, blink, hidden) and 24-bit TrueColor RGB.
+     - Blitting occurs in Ratatui's double-buffered diffing engine, delivering pristine 60fps terminal blitting with zero visual flicker.
+  3. **Direct PTY Stream & Keystroke Forwarding:**
+     - Non-blocking draining of PTY output via `PtyReader::try_recv()` into `turf_vte::Terminal`.
+     - Raw Crossterm keystrokes translated into standard ANSI/POSIX terminal sequences and forwarded directly to the active pane's `PtyWriter`.
+  4. **Spatial Navigation & Focus Cycling:**
+     - `Tab` cycles focus smoothly between `Terminal -> Input -> Sidebar -> Terminal` (or skips Sidebar when hidden).
+     - `Ctrl+B` collapses and expands the left sidebar.
+     - `Ctrl+W` cycles focus across split panes in the current tab.
+     - `Ctrl+1..9` jumps directly to tabs.
+     - `Ctrl+S` and `Ctrl+H` trigger vertical and horizontal pane splits.
+  5. **Triple-Lock Mouse Escape Suppression:**
+     - Transmits `\x1b[?1006l\x1b[?1016l\x1b[?1015l\x1b[?1005l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?9l` directly to stdout and filters Latin-1 mouse sequence remnants (`0x80..=0xFF`), completely eradicating ghost typing.
+  6. **Interactive Demo & Test Suite:**
+     - Provided `examples/multiplexer_demo.rs` for immediate interactive testing via `cargo run -p turf-tui --example multiplexer_demo`.
+     - 9 comprehensive unit and headless rendering tests asserting layout rect geometry, 22% sidebar bounding, divider lines, tab pill rendering, split tree partitioning, and focus cycling.
+- **Reason:** Ratatui's diff-based frame blitting eliminates all screen flicker and tearing. A pure single-divider layout maximizes available terminal columns while preserving clean spatial hierarchy and genuine system visibility.
+- **Worker Invariant:** Cockpit terminal panes must remain strictly borderless. All dividers must render as single lines (`│` and `─`) without enclosing rectangular frames. Active tab must render as a high-contrast Electric Lime pill. Terminal keystrokes must route non-blockingly to the active PTY master.
+
 
