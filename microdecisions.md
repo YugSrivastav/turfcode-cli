@@ -385,3 +385,27 @@ All crewmates, contributors, and agents MUST adhere to these invariants when mod
        4. Hardened `inputBox._listener` with regex `/^[\u0080-\u00FF]/` to discard any Latin-1 coordinate remnants before they reach the text buffer.
 - **Reason:** Matching Herdr's spatial distribution requires dropping nested box containers in favor of single-line dividers and generous whitespace. Neutering terminal mouse tracking prevents terminal emulators from flooding stdin with escape packets, completely resolving ghost typing.
 - **Worker Invariant:** Terminal pane must remain borderless. Mouse tracking modes 1003 and 1005 must never be enabled. Input box must strictly filter ANSI escape codes and Latin-1 coordinate sequences.
+
+---
+
+## [MD-045] 2026-11-03: Rust Atomic File Lock Engine, Thread-Safe Intent Board, and Git Worktree Automation
+- **Context:** TurfCode requires robust, zero-collision concurrency guarantees across multi-agent pairing sessions. To prevent agents and peers from colliding, clobbering active files, or leaving repositories in half-written deadlocks, core coordination primitives are ported and implemented in Rust under `crates/turf-protocol` and `crates/turf-core`.
+- **The Fork:** Relying solely on single-threaded JS runtime locks vs. Native Rust core workspace (`turf-protocol` + `turf-core`) with fail-fast multi-file atomic sequence locking, process-bound heartbeat auto-dissolution, thread-safe intent persistence, and automated git worktree squash-merging.
+- **Resolution:** Implemented `crates/turf-protocol` and `crates/turf-core` in the Cargo workspace with:
+  1. **Atomic Multi-File Sequence Locking (`LockManager`):**
+     - Pre-flight conflict inspection ensures that if ANY file in a declared sequence is held by another task, acquisition fails fast immediately with zero partial locks acquired ([MD-023], [MD-040]).
+     - Atomic JSON persistence to `.turf/locks.json` via temporary file writing and atomic rename.
+     - TTL lease expiration and background Tokio heartbeat monitor auto-dissolves stale locks.
+     - Process-bound lease dissolution via `libc::kill(pid, 0)` automatically releases locks if the owning agent process terminates ([MD-007]).
+     - Host manual force-unlock capability (`force_unlock`).
+  2. **Thread-Safe Intent Board (`IntentBoard`):**
+     - Conforms to task card schema: `{ id, title, assignee, status, target_files, created_at }` with statuses (`queued`, `in_progress`, `done`, `blocked`).
+     - Safe concurrent in-memory storage backed by `parking_lot::RwLock` and atomic JSON disk persistence to `.turf/intent-board.json`.
+  3. **Git Worktree Automation (`WorktreeManager`):**
+     - Automated isolated worktree creation under `.turf/worktrees/<task-id>` with branch `task/<task-id>`.
+     - Automated squash-merging into main branch with git trailer formatting (`Co-authored-by: Name <email>`) conforming to [MD-012] and [MD-039].
+     - Fail-safe merge conflict handling with automatic clean working tree reset (`git reset --hard HEAD`).
+     - Worktree pruning and task branch cleanup (`remove_task_worktree`).
+- **Reason:** Guaranteeing concurrency safety across multiple simultaneous AI agents requires strict atomic sequence acquisition before any disk writes occur. Process binding guarantees that crashed or SIGKILLed agent processes never hold locks indefinitely.
+- **Worker Invariant:** Multi-file locking must never acquire partial locks on conflict. Merging completed agent worktrees must squash into target branch with Co-authored-by trailers and preserve repository cleanliness on conflict.
+
