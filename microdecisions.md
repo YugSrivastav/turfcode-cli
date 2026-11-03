@@ -432,6 +432,8 @@ All crewmates, contributors, and agents MUST adhere to these invariants when mod
 
 ---
 
+---
+
 ## [MD-047] 2026-11-03: Herdr-Grade Ratatui Spatial Multiplexer Cockpit: Borderless Panes, Electric Lime Pill Tabs, and 60fps VTE Frame Blitter
 - **Context:** Delivering the pristine, lightning-fast terminal experience demanded by the Captain requires replacing heavy boxed widgets and Node.js wrappers with a native Rust Ratatui cockpit inspired directly by Herdr's spatial layout architecture.
 - **The Fork:** Keep nested boxed containers and Blessed/Node rendering vs. Implement `crates/turf-tui` in Ratatui 0.29 + Crossterm 0.28 with borderless terminal panes, solid Electric Lime pill tab strips, a full-height single-divider sidebar, and a 60fps flicker-free VTE-to-Ratatui cell blitter.
@@ -460,5 +462,41 @@ All crewmates, contributors, and agents MUST adhere to these invariants when mod
      - 9 comprehensive unit and headless rendering tests asserting layout rect geometry, 22% sidebar bounding, divider lines, tab pill rendering, split tree partitioning, and focus cycling.
 - **Reason:** Ratatui's diff-based frame blitting eliminates all screen flicker and tearing. A pure single-divider layout maximizes available terminal columns while preserving clean spatial hierarchy and genuine system visibility.
 - **Worker Invariant:** Cockpit terminal panes must remain strictly borderless. All dividers must render as single lines (`│` and `─`) without enclosing rectangular frames. Active tab must render as a high-contrast Electric Lime pill. Terminal keystrokes must route non-blockingly to the active PTY master.
+
+---
+
+## [MD-048] 2026-11-03: Native Rust Multiplayer P2P WebSocket Tunnel, AES-256-GCM Encrypted State Synchronization, and Unified Single Binary CLI Entry Point
+- **Context:** TurfCode requires a robust, low-latency, cross-platform multiplayer networking layer to connect developers and remote AI coding agents in real-time, authenticate sessions across firewalls using unambiguous room codes, maintain synchronized intent boards and file locks without data corruption, and provide a single binary CLI executable (`turf` / `turfcode`).
+- **The Fork:** Rely on Node.js WebSocket wrappers (`ws`) and external proxy processes vs. Build a native, asynchronous Rust networking crate (`crates/turf-net`) powered by `tokio-tungstenite 0.24`, `aes-gcm 0.10`, `sha2 0.10`, and `futures-util 0.3`, paired with a compiled binary CLI entry point.
+- **Resolution:** Implement `crates/turf-net` in the Cargo workspace:
+  1. **Cryptographic Engine & Unambiguous Room Codes (`crypto.rs`):**
+     - Ephemeral 6-character room code generator in `TURF-XXXX` format using an unambiguous 32-character alphabet (`23456789ABCDEFGHJKLMNPQRSTUVWXYZ`, excluding `0`, `1`, `I`, `O`) conforming to [MD-025].
+     - SHA-256 key derivation yielding a 256-bit symmetric key from normalized room codes.
+     - Authenticated payload encryption and decryption via AES-256-GCM with 96-bit random nonces and 128-bit authentication tags (`EncryptedPayload { iv, tag, data }`), ensuring cross-language compatibility with Node.js clients and complete immunity to ciphertext tampering or replay.
+     - In-memory credential exchange [MD-019]: client transmits ephemeral tokens over AES-GCM without writing tokens or secrets to disk.
+  2. **WebSocket Tunnel Server (`TunnelServer`):**
+     - Binds asynchronously using Tokio `TcpListener` on a designated or ephemeral port with WebSocket upgrade via `tokio_tungstenite::accept_async`.
+     - 10-second handshake timeout enforcing room code verification and credentials payload decryption before granting access.
+     - Maintains in-memory connected peer registry (`ServerPeer`) with unbounded `mpsc` outgoing message channels for full-duplex non-blocking streaming.
+     - Integrates directly with `turf-core`'s `IntentBoard` and `LockManager` (with fallback to thread-safe in-memory collections when running standalone).
+  3. **WebSocket Tunnel Client (`TunnelClient`):**
+     - Asynchronous WebSocket client using `tokio_tungstenite::connect_async`.
+     - Automatically derives key and encrypts `PeerCredentials` with the target room code during handshake.
+     - Spawns background worker task for concurrent full-duplex message transmission and reception.
+     - Maintains thread-safe replicated local copies of Intent Board tasks (`replicated_tasks`), active file locks (`replicated_locks`), and connected peers (`connected_peers`), accessible via non-blocking asynchronous getter methods.
+  4. **Live State Delta Replication & Presence:**
+     - Bidirectional delta broadcast: additions and status updates to tasks (`TaskAdd`, `TaskUpdate`) and atomic file lock acquisitions/releases (`LockAcquire`, `LockRelease`) automatically broadcast updated state snapshots (`TasksSync`, `LocksSync`) to all connected peers.
+     - Automatic peer presence notifications (`PeerJoined`, `PeerLeft`, `PeersSync`) broadcast on peer connection and clean or abnormal disconnection.
+     - Pre-flight atomic collision detection: prevents concurrent agents from acquiring locks on overlapping files across the network.
+  5. **Unified Single Binary CLI Entry Point (`cli.rs`, `bin/turf.rs`, `bin/turfcode.rs`):**
+     - Provides native compiled binaries `turf` and `turfcode`.
+     - Interactive two-option launcher prompt conforming to [MD-041] (`[1] Create a Turf`, `[2] Join a Turf`, `[3] Exit`) when run without arguments in an interactive terminal.
+     - Subcommands: `turf host [dir]` (boots server, initializes `.turf/`, reveals room code and local endpoint) and `turf join <id> [url]` (executes encrypted handshake and synchronizes state).
+  6. **Comprehensive Test Suite:**
+     - 8 unit tests in `crypto` and `protocol` verifying key derivation, AES-GCM encryption/decryption roundtrip, tampered ciphertext rejection, and WebSocket message conversion.
+     - 4 integration tests in `handshake_tests` verifying successful encrypted handshake, room code mismatch rejection, corrupted payload rejection, and multi-client connection.
+     - 2 integration tests in `state_replication_tests` validating end-to-end live state delta replication between host and multiple peers, task addition and status sync, multi-file lock synchronization with conflict rejection, peer presence join/leave events, and integration with `turf-core` disk persistence.
+- **Reason:** Native Rust networking eliminates Node.js GC stalls and connection dropped errors, provides cryptographically verified payload integrity using hardware-accelerated AES-GCM, and allows TurfCode to distribute as a single standalone binary with zero Node.js runtime dependencies.
+- **Worker Invariant:** Room code handshakes must verify room code and decrypt credentials payload before peer registration. State mutations on tasks or locks must immediately broadcast state deltas to all authenticated peers. Unambiguous room codes must strictly exclude `0`, `1`, `I`, `O`.
 
 
