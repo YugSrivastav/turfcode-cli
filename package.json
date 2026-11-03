@@ -1,0 +1,21 @@
+{
+  "name": "turfcode",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Real-time multiplayer AI coding cockpit in your terminal",
+  "bin": {
+    "turf": "./bin/turf.js"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "start": "node bin/turf.js"
+  },
+  "dependencies": {
+    "blessed": "^0.1.81",
+    "chalk": "^5.3.0",
+    "node-pty": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
