@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "crates/turf-protocol",
+    "crates/turf-core",
+]
+resolver = "2"
