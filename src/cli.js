@@ -16,15 +16,11 @@ import chalk from 'chalk';
 import { runPreflightChecks, printPreflightErrors } from './preflight.js';
 import { createCockpit } from './cockpit.js';
 import { CHALK } from './theme.js';
+import { TunnelServer, generateRoomCode as generateRoomCodeFromTunnel } from './tunnel.js';
+import { TurfClient } from './client.js';
 
 export function generateRoomCode() {
-  const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ'; // exclude ambiguous chars 0, 1, I, O
-  let code = '';
-  const bytes = crypto.randomBytes(4);
-  for (let i = 0; i < 4; i++) {
-    code += chars[bytes[i] % chars.length];
-  }
-  return `TURF-${code}`;
+  return generateRoomCodeFromTunnel(4);
 }
 
 export function parseArgs(rawArgs) {
@@ -173,10 +169,27 @@ export async function runCLI(argv = process.argv) {
   if (command === 'host') {
     const targetDir = path.resolve(process.cwd(), dir || '.');
     const roomCode = generateRoomCode();
+    const port = process.env.TURF_PORT ? parseInt(process.env.TURF_PORT, 10) : 0;
+    const tunnelServer = new TunnelServer({
+      cwd: targetDir,
+      roomCode,
+      port
+    });
+
+    let serverInfo = null;
+    try {
+      serverInfo = await tunnelServer.start();
+    } catch (err) {
+      console.error(CHALK.alertRed(`Failed to start tunnel server: ${err.message}`));
+      return 1;
+    }
+
     createCockpit({
       mode: 'host',
       cwd: targetDir,
-      roomCode,
+      roomCode: serverInfo?.roomCode || roomCode,
+      tunnelServer,
+      tunnelUrl: serverInfo?.tunnelUrl,
       userName: process.env.USER || 'Host',
       role: 'Host'
     });
@@ -190,10 +203,28 @@ export async function runCLI(argv = process.argv) {
       return 1;
     }
     const cleanRoom = roomId.startsWith('TURF-') ? roomId : `TURF-${roomId}`;
+    const hostUrl = process.env.TURF_HOST_URL || 'ws://127.0.0.1:7873';
+    const client = new TurfClient({
+      roomCode: cleanRoom,
+      hostUrl,
+      username: process.env.USER || 'Peer',
+      role: 'Peer',
+      autoReconnect: true
+    });
+
+    try {
+      await client.connect();
+    } catch (err) {
+      if (!parsed.nonInteractive) {
+        console.warn(CHALK.amber(`Connecting in background to ${hostUrl} (${err.message})...`));
+      }
+    }
+
     createCockpit({
       mode: 'peer',
       cwd: process.cwd(),
       roomCode: cleanRoom,
+      client,
       userName: process.env.USER || 'Peer',
       role: 'Peer'
     });
