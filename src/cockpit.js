@@ -29,7 +29,10 @@ export function createCockpit(options = {}) {
     screenOptions = {},
     lockManager: customLockManager,
     intentBoard: customIntentBoard,
-    agentRunner: customAgentRunner
+    agentRunner: customAgentRunner,
+    tunnelServer = null,
+    tunnelUrl = null,
+    client = null
   } = options;
 
   let currentDir = cwd;
@@ -207,6 +210,57 @@ export function createCockpit(options = {}) {
       return ` ${dot} {#f0fff0-fg}${p.name}{/#f0fff0-fg}${selfLabel} ${TAGS.cyan(`[${p.role}]`)}`;
     });
     peersBox.setContent(lines.join('\n'));
+  }
+
+  // Wire TunnelServer events (Host mode)
+  if (tunnelServer) {
+    tunnelServer.on('peer-joined', ({ peerId, username: pName, role: pRole }) => {
+      if (!peers.some(p => p.id === peerId)) {
+        peers.push({ id: peerId, name: pName, role: pRole || 'Peer', isSelf: false });
+        renderPeers();
+        screen.render();
+      }
+    });
+
+    tunnelServer.on('peer-left', ({ peerId }) => {
+      const idx = peers.findIndex(p => p.id === peerId);
+      if (idx !== -1) {
+        peers.splice(idx, 1);
+        renderPeers();
+        screen.render();
+      }
+    });
+  }
+
+  // Wire TurfClient events (Peer mode)
+  if (client) {
+    client.on('tasks-updated', (syncedTasks) => {
+      if (intentBoard) {
+        intentBoard.tasks = syncedTasks;
+      }
+      renderTasks();
+      screen.render();
+    });
+
+    client.on('locks-updated', (syncedLocks) => {
+      if (lockManager) {
+        lockManager.locks = syncedLocks;
+      }
+      renderLocks();
+      screen.render();
+    });
+
+    client.on('peers-updated', (syncedPeers) => {
+      peers.length = 0;
+      peers.push({ name: userName, role: role, isSelf: true });
+      for (const p of syncedPeers) {
+        if (p.username !== userName && !peers.some(existing => existing.id === p.id)) {
+          peers.push({ id: p.id, name: p.username, role: p.role || 'Peer', isSelf: false });
+        }
+      }
+      renderPeers();
+      screen.render();
+    });
   }
 
   // 3d. Sidebar Collapse Button
@@ -708,8 +762,13 @@ export function createCockpit(options = {}) {
     if (inputStr.startsWith('/task add ')) {
       const title = inputStr.substring(10).trim();
       if (title) {
-        const added = intentBoard.addTask({ title, assignee: userName, status: 'queued' });
-        activeTab.log.log(`${TAGS.lime('[INTENT] Added task')} #${added.id}: ${added.title}`);
+        if (mode === 'peer' && client) {
+          client.addTask({ title, assignee: userName });
+          activeTab.log.log(`${TAGS.lime('[INTENT] Task add request sent:')} ${title}`);
+        } else {
+          const added = intentBoard.addTask({ title, assignee: userName, status: 'queued' });
+          activeTab.log.log(`${TAGS.lime('[INTENT] Added task')} #${added.id}: ${added.title}`);
+        }
       }
       setFocus(2);
       return;
@@ -718,9 +777,15 @@ export function createCockpit(options = {}) {
     if (inputStr.startsWith('/task done ')) {
       const tId = inputStr.substring(11).trim();
       if (tId) {
-        intentBoard.updateTask(tId, { status: 'done' });
-        lockManager.releaseLocks(tId);
-        activeTab.log.log(`${TAGS.lime('[INTENT] Task')} #${tId} ${TAGS.lime('completed and locks released')}`);
+        if (mode === 'peer' && client) {
+          client.updateTask(tId, { status: 'done' });
+          client.releaseLocks(tId);
+          activeTab.log.log(`${TAGS.lime('[INTENT] Task completion sent for')} #${tId}`);
+        } else {
+          intentBoard.updateTask(tId, { status: 'done' });
+          lockManager.releaseLocks(tId);
+          activeTab.log.log(`${TAGS.lime('[INTENT] Task')} #${tId} ${TAGS.lime('completed and locks released')}`);
+        }
       }
       setFocus(2);
       return;
@@ -731,11 +796,16 @@ export function createCockpit(options = {}) {
       const tId = parts[0];
       const files = parts.slice(1);
       if (tId && files.length > 0) {
-        const res = lockManager.acquireAtomicSequence(userName, tId, files);
-        if (res.success) {
-          activeTab.log.log(`${TAGS.lime(`[LOCK ACQUIRED] Task #${tId} locked ${files.length} file(s)`)}`);
+        if (mode === 'peer' && client) {
+          client.acquireLock(tId, files);
+          activeTab.log.log(`${TAGS.lime(`[LOCK REQUEST] Sent lock request for task #${tId}`)}`);
         } else {
-          activeTab.log.log(`${TAGS.red(res.error || `[LOCK CONFLICT] Cannot lock ${res.conflictFile}`)}`);
+          const res = lockManager.acquireAtomicSequence(userName, tId, files);
+          if (res.success) {
+            activeTab.log.log(`${TAGS.lime(`[LOCK ACQUIRED] Task #${tId} locked ${files.length} file(s)`)}`);
+          } else {
+            activeTab.log.log(`${TAGS.red(res.error || `[LOCK CONFLICT] Cannot lock ${res.conflictFile}`)}`);
+          }
         }
       }
       setFocus(2);
@@ -745,8 +815,13 @@ export function createCockpit(options = {}) {
     if (inputStr.startsWith('/unlock ')) {
       const tId = inputStr.substring(8).trim();
       if (tId) {
-        const res = lockManager.releaseLocks(tId);
-        activeTab.log.log(`${TAGS.lime(`[LOCKS RELEASED] Released ${res.released.length} file(s) for task #${tId}`)}`);
+        if (mode === 'peer' && client) {
+          client.releaseLocks(tId);
+          activeTab.log.log(`${TAGS.lime(`[UNLOCK REQUEST] Sent release request for task #${tId}`)}`);
+        } else {
+          const res = lockManager.releaseLocks(tId);
+          activeTab.log.log(`${TAGS.lime(`[LOCKS RELEASED] Released ${res.released.length} file(s) for task #${tId}`)}`);
+        }
       }
       setFocus(2);
       return;
@@ -762,6 +837,13 @@ export function createCockpit(options = {}) {
           activeTab.log.log(`${TAGS.dim(`[UNLOCK] File was not locked: ${file}`)}`);
         }
       }
+      setFocus(2);
+      return;
+    }
+
+    if (mode === 'peer' && client) {
+      activeTab.log.log(`${TAGS.cyan(`[${userName}]`)} ${inputStr}`);
+      client.submitPrompt(inputStr);
       setFocus(2);
       return;
     }
@@ -921,6 +1003,12 @@ export function createCockpit(options = {}) {
   setFocus(2);
 
   function destroy() {
+    if (tunnelServer && typeof tunnelServer.stop === 'function') {
+      tunnelServer.stop().catch(() => {});
+    }
+    if (client && typeof client.disconnect === 'function') {
+      client.disconnect();
+    }
     lockManager.destroy();
     agentRunner.destroy();
     tabs.forEach(t => {
@@ -968,6 +1056,9 @@ export function createCockpit(options = {}) {
     terminateAgent: (taskId, requesterId, signal) => agentRunner.terminateAgent(taskId, requesterId, signal),
     pauseAgent: (taskId) => agentRunner.pauseAgent(taskId),
     resumeAgent: (taskId) => agentRunner.resumeAgent(taskId),
+    tunnelServer,
+    tunnelUrl,
+    client,
     get tasks() {
       return intentBoard.getTasks();
     },

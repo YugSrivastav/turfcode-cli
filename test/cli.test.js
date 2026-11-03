@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseArgs, generateRoomCode } from '../src/cli.js';
+import { parseArgs, generateRoomCode, runCLI } from '../src/cli.js';
 import { runPreflightChecks } from '../src/preflight.js';
 
 test('CLI parseArgs handles subcommands and flags', () => {
@@ -27,4 +27,17 @@ test('generateRoomCode produces 6-character TURF-XXXX room codes', () => {
 test('Preflight checks validate dependencies and environment', async () => {
   const result = await runPreflightChecks({ allowNonTTY: true });
   assert.equal(result.ok, true, `Preflight checks must pass when allowNonTTY is true: ${result.issues.join(', ')}`);
+});
+
+test('runCLI handles --version and --help without error', async () => {
+  const versionExit = await runCLI(['node', 'turf', '--version']);
+  assert.equal(versionExit, 0);
+
+  const helpExit = await runCLI(['node', 'turf', '--help']);
+  assert.equal(helpExit, 0);
+});
+
+test('runCLI join without room code returns error code 1', async () => {
+  const joinExit = await runCLI(['node', 'turf', 'join', '--non-interactive']);
+  assert.equal(joinExit, 1);
 });
