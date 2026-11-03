@@ -5,6 +5,7 @@ members = [
     "crates/turf-vte",
     "crates/turf-protocol",
     "crates/turf-core",
+    "crates/turf-tui",
 ]
 
 [workspace.package]
@@ -20,3 +21,5 @@ tokio = { version = "1", features = ["full"] }
 thiserror = "1"
 tracing = "0.1"
 unicode-width = "0.2"
+ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
+crossterm = "0.28"

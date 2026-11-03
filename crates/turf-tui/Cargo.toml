@@ -1,0 +1,24 @@
+[package]
+name = "turf-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+turf-vte = { path = "../turf-vte" }
+turf-pty = { path = "../turf-pty" }
+turf-protocol = { path = "../turf-protocol" }
+turf-core = { path = "../turf-core" }
+
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+unicode-width = { workspace = true }
+chrono = "0.4"
+
+[[example]]
+name = "multiplexer_demo"
+path = "examples/multiplexer_demo.rs"
