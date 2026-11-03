@@ -34,3 +34,35 @@ All crewmates, contributors, and agents MUST adhere to these invariants when mod
 - **The Fork:** 24-bit TrueColor ANSI palette shift vs. native OS window/Electron wrapper.
 - **Resolution:** Option A: Pure CLI TrueColor palette. Dark obsidian-emerald background (`#081008`), high-contrast electric lime borders and accents (`#39FF14`), and distinct status indicators.
 - **Worker Invariant:** Never rely on default terminal monochrome. All borders, headers, and status lines must render in the signature Electric Lime design token scale.
+
+---
+
+## [MD-005] 2026-11-03: Host-Centric Agent Execution
+- **Context:** Deciding where AI agents physically execute when triggered by connected peers.
+- **The Fork:** Host-centric execution (agents run on host machine) vs. distributed execution (peer runs agents locally and syncs files).
+- **Resolution:** Option A: Host-Centric Execution. The host machine holds the primary git repository, filesystem, and spawns the `agy` subprocesses. The peer CLI operates as a thin client streaming inputs and live terminal tokens. Eliminates git merge divergence and peer environment prerequisites.
+- **Worker Invariant:** All agent subprocesses must spawn in the host workspace. Peer inputs are routed to host PTY streams.
+
+---
+
+## [MD-006] 2026-11-03: Ephemeral Tunnel NAT Traversal
+- **Context:** Connecting peers across the internet without manual port forwarding or LAN requirements.
+- **The Fork:** Ephemeral tunnel (Cloudflare Quick Tunnel / localtunnel) vs. centralized relay server vs. LAN-only.
+- **Resolution:** Option A: Ephemeral HTTPS/WSS Tunnel. TurfCode spins up an automated tunnel on session creation, issuing a 6-character room code (e.g. `TURF-7A9B`). Peers join globally across firewalls without manual router configuration.
+- **Worker Invariant:** Connection client must fail over gracefully if tunnel connection drops and attempt automatic reconnection.
+
+---
+
+## [MD-007] 2026-11-03: Process-Bound Lock Heartbeats & Force Unlock
+- **Context:** Preventing permanent file lock deadlocks if an agent process hangs or crashes.
+- **The Fork:** Process-bound lease with TTL and manual force unlock vs. manual unlock only.
+- **Resolution:** Option A: Process-bound lease with heartbeat. Locks are linked to the active agent process PID. If the process terminates or heartbeats cease for >10 seconds, the lock is automatically dissolved. Host retains a manual `[Force Unlock]` action on the Intent Board.
+- **Worker Invariant:** Never leave orphaned locks on disk or in memory. Always verify process liveness before rejecting file writes.
+
+---
+
+## [MD-008] 2026-11-03: Decoupled Scrollable Viewport Geometry
+- **Context:** Managing terminal screen dimension mismatches between peers (e.g. 27" monitor vs. 13" laptop).
+- **The Fork:** Decoupled scrollable viewports vs. smallest common denominator forced window shrinking.
+- **Resolution:** Option A: Decoupled scrollable viewports. Each peer retains their own local screen buffer dimensions and scroll position. Output text wraps dynamically to each peer's terminal width.
+- **Worker Invariant:** Terminal resize events (SIGWINCH) on the peer must not forcibly crush the host's terminal dimensions.
