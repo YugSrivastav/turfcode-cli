@@ -2,3 +2,5 @@ node_modules/
 .turf/
 *.log
 .DS_Store
+target/
+

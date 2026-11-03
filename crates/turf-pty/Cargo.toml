@@ -1,0 +1,18 @@
+[package]
+name = "turf-pty"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Cross-platform PTY management and process lifecycle for TurfCode CLI"
+
+[dependencies]
+portable-pty = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+turf-vte = { path = "../turf-vte" }
+

@@ -1,0 +1,15 @@
+[package]
+name = "turf-vte"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "High-performance ANSI terminal parser and 2D character cell grid for TurfCode CLI"
+
+[dependencies]
+vte = { workspace = true }
+unicode-width = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
