@@ -66,3 +66,83 @@ All crewmates, contributors, and agents MUST adhere to these invariants when mod
 - **The Fork:** Decoupled scrollable viewports vs. smallest common denominator forced window shrinking.
 - **Resolution:** Option A: Decoupled scrollable viewports. Each peer retains their own local screen buffer dimensions and scroll position. Output text wraps dynamically to each peer's terminal width.
 - **Worker Invariant:** Terminal resize events (SIGWINCH) on the peer must not forcibly crush the host's terminal dimensions.
+
+---
+
+## [MD-009] 2026-11-03: Graceful Host Shutdown with Stash (Failover on Roadmap)
+- **Context:** Handling abrupt host disconnection (e.g. laptop lid closes or network drops).
+- **The Fork:** Graceful pause and safe stash vs. instant automatic peer host-migration.
+- **Resolution:** Option A for MVP: 30-second reconnection grace period. If host does not reconnect, session terminates cleanly, uncommitted changes are auto-stashed on host disk, and peer is notified. Option B (automatic state migration and peer promotion to host) is scheduled as a future milestone.
+- **Worker Invariant:** An ungraceful host drop must never leave corrupted git working states or uncommitted work deleted.
+
+---
+
+## [MD-010] 2026-11-03: Per-User AGY Account & Session ID Isolation
+- **Context:** Managing Antigravity quota and identity when multiple peers prompt agents on the host.
+- **The Fork:** Host pays for all agent tokens vs. per-user credential passthrough and session isolation.
+- **Resolution:** Option B: Per-User Credential Passthrough. Peers connect with their own Antigravity auth/account credentials and distinct session IDs. When Ayush launches an agent, the host executes `agy` scoped to Ayush's account token and session ID, consuming Ayush's quota.
+- **Worker Invariant:** Subprocess environment variables must dynamically inject the invoking user's auth token and session ID rather than defaulting to host credentials.
+
+---
+
+## [MD-011] 2026-11-03: Trusted Peer Boundary (Permission Gating on Roadmap)
+- **Context:** Security and command execution boundaries for connected peers.
+- **The Fork:** Trusted peer execution within project root vs. mandatory host confirmation prompt for every command.
+- **Resolution:** Option A for MVP: Trusted peer model scoped strictly to project root (`cwd`). Host confirmation gating for sensitive commands/paths is scheduled for Phase 2.
+- **Worker Invariant:** Peer terminal sessions must never have their working directory set outside the project repository root.
+
+---
+
+## [MD-012] 2026-11-03: Git Co-Authorship via Standard Trailers
+- **Context:** Attributing commits made through multiplayer collaborative agent runs.
+- **The Fork:** Co-authored commits vs. actor-only single author commits.
+- **Resolution:** Option A: Git Co-Authorship. Commits list the host as the primary author, with the contributing peer credited via standard git trailers: `Co-authored-by: <Name> <<email>>`.
+- **Worker Invariant:** Automated commit generation must parse active session contributors and append valid Co-authored-by trailers.
+
+---
+
+## [MD-013] 2026-11-03: Owner-Only Agent Interruption & Floor Control
+- **Context:** Controlling who can cancel or steer a running agent.
+- **The Fork:** Mutual interruption (anyone can Ctrl+C) vs. owner-only floor control.
+- **Resolution:** Option B: Owner-Only Floor Control. Only the user who spawned a specific agent has authority to terminate or send steering inputs to that agent's process. Prevents peer interference.
+- **Worker Invariant:** Signal dispatch (SIGINT/SIGTERM) to an agent PID must verify that the requesting user's session ID matches the agent's owner ID.
+
+---
+
+## [MD-014] 2026-11-03: Structured Intent Board (.turf/intent.json)
+- **Context:** Representing shared tasks, goals, and roadmaps between peers.
+- **The Fork:** Structured JSON task queue vs. freeform collaborative markdown scratchpad.
+- **Resolution:** Option A: Structured in-memory task queue synced to `.turf/intent.json`. Supports discrete task states (`[QUEUED]`, `[IN PROGRESS]`, `[DONE]`), owner assignment, and binding to running agents.
+- **Worker Invariant:** All Intent Board state mutations must serialize atomically to `.turf/intent.json`.
+
+---
+
+## [MD-015] 2026-11-03: Real-Time Activity Ticker & Status Stream
+- **Context:** In-terminal peer communication and awareness.
+- **The Fork:** Minimalist event ticker with `/msg` vs. heavy 3-panel chat room.
+- **Resolution:** Option A: Lightweight activity stream in the Intent Board footer showing file locks, agent starts, and transient `/msg <text>` alerts. Assumes voice calls handle conversation.
+- **Worker Invariant:** Event messages must be throttled to prevent terminal rendering jitter.
+
+---
+
+## [MD-016] 2026-11-03: Integrated Colorized Diff Inspection
+- **Context:** Reviewing code changes made by agents or peers in real time.
+- **The Fork:** Integrated diff tab inside the TUI vs. manual terminal `git diff` commands.
+- **Resolution:** Option A: Integrated Diff Tab. Pressing `[D]` in the Agent Pane displays a live colorized diff view of modified files with green/red syntax highlighting.
+- **Worker Invariant:** Diff view must generate on-demand from git index without blocking the main event loop.
+
+---
+
+## [MD-017] 2026-11-03: Filesystem Watcher for External IDE Sync
+- **Context:** Detecting manual code changes made in VS Code, Neovim, or external tools.
+- **The Fork:** Inotify/chokidar filesystem watcher vs. manual refresh command.
+- **Resolution:** Option A: Native filesystem watcher. TurfCode monitors the workspace tree and updates the Intent Board and peer views whenever external files change.
+- **Worker Invariant:** Watcher must debounce file change events (minimum 100ms) to avoid spamming the WebSocket channel during rapid saves.
+
+---
+
+## [MD-018] 2026-11-03: Stateful Session Resume (.turf/session.json)
+- **Context:** Preserving state across disconnects and multi-day coding sprints.
+- **The Fork:** Stateful resume via local session file vs. ephemeral wipe-on-exit.
+- **Resolution:** Option A: Stateful Resume. Session metadata, task history, and past agent logs persist in `.turf/session.json`. Host can select `[Resume Previous Turf]` on startup.
+- **Worker Invariant:** State serialization must exclude sensitive tokens and passwords. Sensitive credentials remain purely in-memory.
