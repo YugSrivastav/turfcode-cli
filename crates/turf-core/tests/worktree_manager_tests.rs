@@ -83,7 +83,12 @@ fn test_worktree_automated_squash_merge_with_coauthors() {
     ];
 
     let merge_res = manager
-        .merge_task_worktree("102", "feat(agent): implement new agent feature", &co_authors, None)
+        .merge_task_worktree(
+            "102",
+            "feat(agent): implement new agent feature",
+            &co_authors,
+            None,
+        )
         .unwrap();
 
     assert!(merge_res.success);
@@ -129,7 +134,9 @@ fn test_worktree_pruning_and_cleanup() {
         .current_dir(dir.path())
         .output()
         .unwrap();
-    assert!(String::from_utf8_lossy(&branch_check.stdout).trim().is_empty());
+    assert!(String::from_utf8_lossy(&branch_check.stdout)
+        .trim()
+        .is_empty());
 }
 
 #[test]
@@ -179,5 +186,7 @@ fn test_worktree_merge_conflict_clean_abort() {
         .current_dir(dir.path())
         .output()
         .unwrap();
-    assert!(String::from_utf8_lossy(&status_output.stdout).trim().is_empty());
+    assert!(String::from_utf8_lossy(&status_output.stdout)
+        .trim()
+        .is_empty());
 }

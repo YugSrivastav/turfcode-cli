@@ -41,10 +41,7 @@ pub enum WorktreeError {
     Io(#[from] std::io::Error),
 
     #[error("Git execution failed (exit code {status:?}): {stderr}")]
-    GitCommand {
-        status: Option<i32>,
-        stderr: String,
-    },
+    GitCommand { status: Option<i32>, stderr: String },
 
     #[error("Merge conflict merging '{branch}' into '{target_branch}': {details}")]
     MergeConflict {

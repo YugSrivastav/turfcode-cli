@@ -102,7 +102,10 @@ impl IntentBoard {
         let json = serde_json::to_string_pretty(&payload)?;
         let temp_filename = format!(
             "{}.tmp.{}",
-            self.intent_path.file_name().and_then(|f| f.to_str()).unwrap_or("intent-board.json"),
+            self.intent_path
+                .file_name()
+                .and_then(|f| f.to_str())
+                .unwrap_or("intent-board.json"),
             Uuid::new_v4()
         );
         let temp_path = self.intent_path.with_file_name(temp_filename);
@@ -164,12 +167,18 @@ impl IntentBoard {
         }
 
         self.save_to_disk()?;
-        let _ = self.events_tx.send(IntentEvent::TaskAdded(normalized.clone()));
+        let _ = self
+            .events_tx
+            .send(IntentEvent::TaskAdded(normalized.clone()));
         Ok(normalized)
     }
 
     /// Update status of a task by ID.
-    pub async fn update_task_status(&self, id: &str, status: TaskStatus) -> Result<Option<TaskCard>, IntentError> {
+    pub async fn update_task_status(
+        &self,
+        id: &str,
+        status: TaskStatus,
+    ) -> Result<Option<TaskCard>, IntentError> {
         let updated = {
             let mut tasks = self.tasks.write();
             if let Some(task) = tasks.iter_mut().find(|t| t.id == id) {
@@ -189,7 +198,11 @@ impl IntentBoard {
     }
 
     /// Update task details.
-    pub async fn update_task<F>(&self, id: &str, update_fn: F) -> Result<Option<TaskCard>, IntentError>
+    pub async fn update_task<F>(
+        &self,
+        id: &str,
+        update_fn: F,
+    ) -> Result<Option<TaskCard>, IntentError>
     where
         F: FnOnce(&mut TaskCard),
     {
@@ -217,12 +230,17 @@ impl IntentBoard {
     pub async fn remove_task(&self, id: &str) -> Result<Option<TaskCard>, IntentError> {
         let removed = {
             let mut tasks = self.tasks.write();
-            tasks.iter().position(|t| t.id == id).map(|pos| tasks.remove(pos))
+            tasks
+                .iter()
+                .position(|t| t.id == id)
+                .map(|pos| tasks.remove(pos))
         };
 
         if let Some(ref task) = removed {
             self.save_to_disk()?;
-            let _ = self.events_tx.send(IntentEvent::TaskRemoved(task.id.clone()));
+            let _ = self
+                .events_tx
+                .send(IntentEvent::TaskRemoved(task.id.clone()));
         }
 
         Ok(removed)

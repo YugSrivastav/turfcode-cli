@@ -120,7 +120,10 @@ async fn test_background_tokio_heartbeat_monitor() {
 
     // Lock map should now be completely empty
     let locks = manager.get_locks().await;
-    assert!(locks.is_empty(), "Background task should have auto-dissolved stale lock");
+    assert!(
+        locks.is_empty(),
+        "Background task should have auto-dissolved stale lock"
+    );
 
     monitor_handle.abort();
 }

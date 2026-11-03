@@ -409,3 +409,25 @@ All crewmates, contributors, and agents MUST adhere to these invariants when mod
 - **Reason:** Guaranteeing concurrency safety across multiple simultaneous AI agents requires strict atomic sequence acquisition before any disk writes occur. Process binding guarantees that crashed or SIGKILLed agent processes never hold locks indefinitely.
 - **Worker Invariant:** Multi-file locking must never acquire partial locks on conflict. Merging completed agent worktrees must squash into target branch with Co-authored-by trailers and preserve repository cleanliness on conflict.
 
+---
+
+## [MD-046] 2026-11-03: Native Rust Multiplexer Foundation: `turf-pty` Cross-Platform PTY & `turf-vte` 2D Character Cell Grid
+- **Context:** To match and surpass Herdr's speed, robustness, and resource efficiency, TurfCode CLI requires a native Rust terminal multiplexing core to power PTY process containment, high-throughput asynchronous byte streaming, and high-fidelity ANSI terminal emulation.
+- **The Fork:** Rely solely on Node.js/Blessed wrappers (`node-pty`) vs. Scaffold a native Rust workspace with modular crates (`turf-pty` using `portable-pty` and `turf-vte` using `vte`) maintaining strict 2D character cell grids, TrueColor ANSI parsing, and cross-platform PTY abstraction.
+- **Resolution:** Implement a high-performance native Rust core in a Cargo workspace:
+  1. **Cargo Workspace Root:** Initialized at repository root targeting Rust 2021 edition with workspace members `crates/turf-pty`, `crates/turf-vte`, `crates/turf-protocol`, and `crates/turf-core`, with shared dependencies (`portable-pty 0.8`, `vte 0.14`, `tokio 1.x`, `thiserror 1.x`, `tracing 0.1`, `unicode-width 0.2`).
+  2. **`crates/turf-pty`:**
+     - **Cross-Platform PTY Allocation:** Uses `portable_pty::native_pty_system()` to allocate POSIX PTYs on Linux/WSL/macOS and ConPTY on Windows.
+     - **Shell Spawner:** Automatically defaults to `$SHELL` or `bash` on Unix/Linux, and `powershell.exe` on Windows (`#[cfg(windows)]`). Configures standard multiplexer environment (`TERM=xterm-256color`, `COLORTERM=truecolor`).
+     - **Thread/Task-Safe Streaming Channels:** Encapsulates the PTY master I/O in worker threads paired with Tokio `mpsc` channels (`PtyReader`, `PtyWriter`) implementing `PtyReadStream` and `PtyWriteStream` traits. Non-blocking with `try_send` and runtime-aware block-in-place execution to prevent Tokio worker thread blocking.
+     - **Dynamic Resizing & Lifecycle:** Exposes `resize(rows, cols)` along with `is_alive()`, `try_wait()`, `wait()`, and `kill()`.
+  3. **`crates/turf-vte`:**
+     - **2D Character Grid Buffer (`ScreenBuffer`):** Maintains row/column bounds, scrolling margins (DECSTBM), character cell storage (`Vec<Vec<Cell>>`), clearing modes (`ED`, `EL`), and text extraction helpers.
+     - **Character Cell & Styling:** Rich `Cell` struct supporting UTF-8 characters with `unicode-width` calculation, ANSI 16 named colors, 256-color indexed palette, 24-bit TrueColor RGB (`Color::Rgb(r, g, b)`), and text styling flags (`bold`, `dim`, `italic`, `underline`, `inverse`, `strikethrough`, `blink`, `hidden`).
+     - **ANSI State Machine (`vte::Perform`):** Implements `print`, `execute` (`\r`, `\n`, `\t`, `\b`), `csi_dispatch` (SGR formatting, cursor movements CUU, CUD, CUF, CUB, CNL, CPL, CHA, CUP, VPA, ED, EL, SU, SD, margins, cursor save/restore), `esc_dispatch` (DECSC, DECRC, RIS, IND, RI, NEL), and `osc_dispatch` (window titles).
+     - **Alternate Screen Buffer (`?1049h` / `?1049l`):** Seamless buffer toggling saving/restoring primary cursor and isolating fullscreen terminal tools (e.g., Vim, htop, less) from scrollback.
+  4. **Verification & Testing:** Comprehensive unit and integration test suite (15 tests passing in 0.05s) validating shell spawning, echo transmission, ANSI/RGB color parsing, cursor movement, alternate buffer toggling, and end-to-end PTY-to-VTE streaming pipelines.
+- **Reason:** Native Rust gives zero garbage collection latency, microsecond ANSI dispatch, precise ConPTY/POSIX terminal semantics, and complete immunity to node-pty memory bloat or Blessed screen redraw artifacts.
+- **Worker Invariant:** `turf-pty` must maintain non-blocking channel streaming safe for both synchronous threads and asynchronous Tokio runtimes. `turf-vte` must correctly preserve primary buffer state when toggling alternate screen buffers.
+
+

@@ -82,7 +82,11 @@ pub struct LockManager {
 
 impl LockManager {
     /// Create a new LockManager with custom paths and default TTL.
-    pub fn new(cwd: impl Into<PathBuf>, locks_path: impl Into<PathBuf>, default_ttl_ms: u64) -> Self {
+    pub fn new(
+        cwd: impl Into<PathBuf>,
+        locks_path: impl Into<PathBuf>,
+        default_ttl_ms: u64,
+    ) -> Self {
         let cwd = cwd.into();
         let locks_path = locks_path.into();
         let (events_tx, _) = broadcast::channel(128);
@@ -135,7 +139,10 @@ impl LockManager {
         let payload = serde_json::to_string_pretty(&table)?;
         let temp_filename = format!(
             "{}.tmp.{}",
-            self.locks_path.file_name().and_then(|f| f.to_str()).unwrap_or("locks.json"),
+            self.locks_path
+                .file_name()
+                .and_then(|f| f.to_str())
+                .unwrap_or("locks.json"),
             Uuid::new_v4()
         );
         let temp_path = self.locks_path.with_file_name(temp_filename);
@@ -260,7 +267,11 @@ impl LockManager {
             return Ok(AcquireResult::success(Vec::new()));
         }
 
-        let effective_ttl = if ttl_ms == 0 { self.default_ttl_ms } else { ttl_ms };
+        let effective_ttl = if ttl_ms == 0 {
+            self.default_ttl_ms
+        } else {
+            ttl_ms
+        };
         let now = Utc::now();
 
         let mut locks = self.locks.write();
@@ -399,7 +410,11 @@ impl LockManager {
     }
 
     /// Renew lock lease with optional updated process ID.
-    pub async fn heartbeat_with_pid(&self, task_id: &str, pid: Option<u32>) -> Result<bool, LockError> {
+    pub async fn heartbeat_with_pid(
+        &self,
+        task_id: &str,
+        pid: Option<u32>,
+    ) -> Result<bool, LockError> {
         let now = Utc::now();
         let mut updated = false;
 

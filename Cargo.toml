@@ -1,6 +1,22 @@
 [workspace]
+resolver = "2"
 members = [
+    "crates/turf-pty",
+    "crates/turf-vte",
     "crates/turf-protocol",
     "crates/turf-core",
 ]
-resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["TurfCode Team"]
+
+[workspace.dependencies]
+portable-pty = "0.8"
+vte = "0.14"
+tokio = { version = "1", features = ["full"] }
+thiserror = "1"
+tracing = "0.1"
+unicode-width = "0.2"

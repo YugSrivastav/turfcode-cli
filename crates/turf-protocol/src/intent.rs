@@ -134,11 +134,20 @@ mod tests {
     #[test]
     fn test_task_status_parsing_and_serialization() {
         assert_eq!("queued".parse::<TaskStatus>().unwrap(), TaskStatus::Queued);
-        assert_eq!("in_progress".parse::<TaskStatus>().unwrap(), TaskStatus::InProgress);
-        assert_eq!("inprogress".parse::<TaskStatus>().unwrap(), TaskStatus::InProgress);
+        assert_eq!(
+            "in_progress".parse::<TaskStatus>().unwrap(),
+            TaskStatus::InProgress
+        );
+        assert_eq!(
+            "inprogress".parse::<TaskStatus>().unwrap(),
+            TaskStatus::InProgress
+        );
         assert_eq!("done".parse::<TaskStatus>().unwrap(), TaskStatus::Done);
         assert_eq!("completed".parse::<TaskStatus>().unwrap(), TaskStatus::Done);
-        assert_eq!("blocked".parse::<TaskStatus>().unwrap(), TaskStatus::Blocked);
+        assert_eq!(
+            "blocked".parse::<TaskStatus>().unwrap(),
+            TaskStatus::Blocked
+        );
         assert!("invalid".parse::<TaskStatus>().is_err());
 
         let json = serde_json::to_string(&TaskStatus::InProgress).unwrap();
@@ -149,7 +158,13 @@ mod tests {
 
     #[test]
     fn test_task_card_serialization() {
-        let task = TaskCard::new("1", "Title", "Ayush", TaskStatus::Blocked, vec!["file.rs".into()]);
+        let task = TaskCard::new(
+            "1",
+            "Title",
+            "Ayush",
+            TaskStatus::Blocked,
+            vec!["file.rs".into()],
+        );
         let json = serde_json::to_string(&task).unwrap();
         assert!(json.contains("\"status\":\"blocked\""));
 
@@ -158,4 +173,3 @@ mod tests {
         assert_eq!(deserialized.status, TaskStatus::Blocked);
     }
 }
-

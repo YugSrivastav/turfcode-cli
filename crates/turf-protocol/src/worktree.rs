@@ -39,7 +39,11 @@ impl CoAuthor {
 
     /// Formats as a Git trailer: `Co-authored-by: Name <email>`
     pub fn to_trailer(&self) -> String {
-        format!("Co-authored-by: {} <{}>", self.name.trim(), self.email.trim())
+        format!(
+            "Co-authored-by: {} <{}>",
+            self.name.trim(),
+            self.email.trim()
+        )
     }
 
     /// Parses string such as:
@@ -65,7 +69,11 @@ impl CoAuthor {
                 let name = without_prefix[..start].trim();
                 let email = without_prefix[start + 1..end].trim();
                 return Some(Self {
-                    name: if name.is_empty() { "Collaborator".into() } else { name.into() },
+                    name: if name.is_empty() {
+                        "Collaborator".into()
+                    } else {
+                        name.into()
+                    },
                     email: email.into(),
                 });
             }
@@ -75,7 +83,13 @@ impl CoAuthor {
         let name = without_prefix;
         let email_name: String = name
             .chars()
-            .map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '.' })
+            .map(|c| {
+                if c.is_alphanumeric() {
+                    c.to_ascii_lowercase()
+                } else {
+                    '.'
+                }
+            })
             .collect();
         Some(Self {
             name: name.into(),
@@ -98,7 +112,10 @@ mod tests {
         let ca1 = CoAuthor::parse("Ayush <ayush@turfcode.local>").unwrap();
         assert_eq!(ca1.name, "Ayush");
         assert_eq!(ca1.email, "ayush@turfcode.local");
-        assert_eq!(ca1.to_trailer(), "Co-authored-by: Ayush <ayush@turfcode.local>");
+        assert_eq!(
+            ca1.to_trailer(),
+            "Co-authored-by: Ayush <ayush@turfcode.local>"
+        );
 
         let ca2 = CoAuthor::parse("Co-authored-by: Bob <bob@example.com>").unwrap();
         assert_eq!(ca2.name, "Bob");
@@ -113,4 +130,3 @@ mod tests {
         assert_eq!(trailers.len(), 2);
     }
 }
-

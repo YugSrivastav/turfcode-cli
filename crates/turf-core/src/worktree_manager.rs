@@ -123,7 +123,8 @@ impl WorktreeManager {
         // If directory already exists and is registered in git worktrees, return existing
         if worktree_path.exists() {
             let active_list = self.list_worktrees().unwrap_or_default();
-            let canonical_wt = std::fs::canonicalize(&worktree_path).unwrap_or_else(|_| worktree_path.clone());
+            let canonical_wt =
+                std::fs::canonicalize(&worktree_path).unwrap_or_else(|_| worktree_path.clone());
             if let Some(existing) = active_list.iter().find(|wt| {
                 let wt_p = PathBuf::from(&wt.worktree_path);
                 let can_p = std::fs::canonicalize(&wt_p).unwrap_or(wt_p);
@@ -153,12 +154,18 @@ impl WorktreeManager {
             self.run_git(&["worktree", "add", &wt_str, &branch], None)?;
         } else {
             // Determine commit-ish to branch from
-            let start_point = if self.run_git(&["rev-parse", "--verify", &self.base_branch], None).is_ok() {
+            let start_point = if self
+                .run_git(&["rev-parse", "--verify", &self.base_branch], None)
+                .is_ok()
+            {
                 self.base_branch.as_str()
             } else {
                 "HEAD"
             };
-            self.run_git(&["worktree", "add", "-b", &branch, &wt_str, start_point], None)?;
+            self.run_git(
+                &["worktree", "add", "-b", &branch, &wt_str, start_point],
+                None,
+            )?;
         }
 
         let commit = self
@@ -191,7 +198,9 @@ impl WorktreeManager {
                 format!("task/{id}")
             }
         });
-        let target_branch = opts.target_branch.unwrap_or_else(|| self.base_branch.clone());
+        let target_branch = opts
+            .target_branch
+            .unwrap_or_else(|| self.base_branch.clone());
 
         // Ensure host checkout is on target_branch
         let current_branch = self
@@ -279,7 +288,11 @@ impl WorktreeManager {
     }
 
     /// Cleanly prunes and removes the worktree directory and optionally deletes branch.
-    pub fn remove_task_worktree(&self, task_id: &str, delete_branch: bool) -> Result<(), WorktreeError> {
+    pub fn remove_task_worktree(
+        &self,
+        task_id: &str,
+        delete_branch: bool,
+    ) -> Result<(), WorktreeError> {
         let id = task_id.trim();
         let branch = if id.starts_with("task/") || id.starts_with("turf/") {
             id.to_string()
@@ -333,7 +346,10 @@ impl WorktreeManager {
             } else if let Some(head) = line.strip_prefix("HEAD ") {
                 current_commit = Some(head.trim().to_string());
             } else if let Some(branch) = line.strip_prefix("branch ") {
-                let cleaned = branch.trim().strip_prefix("refs/heads/").unwrap_or(branch.trim());
+                let cleaned = branch
+                    .trim()
+                    .strip_prefix("refs/heads/")
+                    .unwrap_or(branch.trim());
                 current_branch = Some(cleaned.to_string());
             }
         }
