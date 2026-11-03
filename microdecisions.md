@@ -306,3 +306,21 @@ All crewmates, contributors, and agents MUST adhere to these invariants when mod
 - **The Fork:** Interactive launcher (`turf` / `npx turfcode`) with shortcut flags vs. strict subcommand-only CLI.
 - **Resolution:** Option A: Interactive Cockpit Launcher. Running `turf` displays an Electric Lime splash with `[1] Host a Turf`, `[2] Join a Turf`. Shortcut flags (`turf host .`, `turf join <ID>`, `turf kill`) provide instant power-user access.
 - **Worker Invariant:** Launcher must run pre-flight port and dependency checks before entering raw TTY mode.
+
+---
+
+## [MD-039] 2026-11-03: Host-Owned Worktree Merging & Host Quota Attribution
+- **Context:** Determining who bears the token and compute quota when merging completed agent worktrees back into `main`.
+- **The Fork:** Peer quota vs. host quota for git merge resolution.
+- **Resolution:** Host quota. The host machine is the authoritative owner of the git repository. When an agent finishes its task, the merge resolution, git verification, and conflict checks execute on the host machine using the host's quota and git identity.
+- **Reason:** The host owns the disk and final branch state. Merges must be resolved locally on the host to prevent desynchronization between remote peers and the host's local git tree.
+- **Worker Invariant:** Merge operations must execute within the host process context and never bill against peer session tokens.
+
+---
+
+## [MD-040] 2026-11-03: Pre-Flight Sequence Declaration & Atomic Multi-File Locking
+- **Context:** Handling agents that touch multiple files (2-3 files) simultaneously or in rapid succession.
+- **The Fork:** Lazy lock-on-write vs. mandatory upfront intent declaration with file sequence locking.
+- **Resolution:** Mandatory upfront intent declaration. Before any agent can touch workspace files, it must declare its intent and the explicit sequence of files it plans to modify (e.g. `[1. src/models/user.ts -> 2. src/routes/auth.ts -> 3. test/auth.test.ts]`). TurfCode acquires an atomic lock on all files in the sequence before granting write permissions.
+- **Reason:** If an agent modifies file 1, and then tries to modify file 2 only to find file 2 is locked by another peer, the agent is left in a dirty, half-finished state. Atomic sequence locking eliminates partial-write deadlocks.
+- **Worker Invariant:** An agent process must acquire all sequence locks atomically before writing to its worktree. If any file in the sequence is held, the entire operation halts pre-flight.
