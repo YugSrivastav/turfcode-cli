@@ -146,3 +146,83 @@ All crewmates, contributors, and agents MUST adhere to these invariants when mod
 - **The Fork:** Stateful resume via local session file vs. ephemeral wipe-on-exit.
 - **Resolution:** Option A: Stateful Resume. Session metadata, task history, and past agent logs persist in `.turf/session.json`. Host can select `[Resume Previous Turf]` on startup.
 - **Worker Invariant:** State serialization must exclude sensitive tokens and passwords. Sensitive credentials remain purely in-memory.
+
+---
+
+## [MD-019] 2026-11-03: Encrypted Join Handshake & Credential Passthrough
+- **Context:** Authenticating peer identities and scoping agent API credentials.
+- **The Fork:** Host pays for all tokens vs. encrypted handshake transmitting peer's own auth token and session ID.
+- **Resolution:** Option A: Encrypted Join Handshake. The peer authenticates locally and transmits an ephemeral token/session ID over the encrypted tunnel. The peer's agent runs under the peer's account and session, consuming the peer's quota.
+- **Worker Invariant:** Never log or leak peer credentials into persistent session files.
+
+---
+
+## [MD-020] 2026-11-03: Host as Live File Server, Peer Local Input Loop
+- **Context:** Low-latency input handling and role of the host device.
+- **The Fork:** Forwarding every raw keystroke over network vs. host as authoritative live file server while peer drives a local input loop.
+- **Resolution:** Option A: Host acts as the low-latency live file server and lock coordinator. Peer types prompts locally with instant feedback; only completed prompts, file sync operations, and lock transactions cross the network.
+- **Worker Invariant:** Input typing must never be blocked by network latency; local buffer handles keystrokes smoothly.
+
+---
+
+## [MD-021] 2026-11-03: Throttled Frame Buffering @ 30ms for Streaming
+- **Context:** Managing high-speed agent token output without network packet spam or TUI redraw flickering.
+- **The Fork:** Throttled frame buffering vs. raw unbuffered byte streaming.
+- **Resolution:** Option A: Throttled 30ms frame buffering. Terminal deltas are collected and emitted in 30ms bursts, providing fluid visual animation without saturating the WebSocket channel.
+- **Worker Invariant:** Frame buffer must auto-flush immediately on process exit or user input interruption.
+
+---
+
+## [MD-022] 2026-11-03: Isolated Git Worktrees per Agent
+- **Context:** Preventing parallel running agents from colliding on uncommitted files.
+- **The Fork:** Isolated git worktrees per agent vs. single shared root working directory.
+- **Resolution:** Option A: Isolated git worktrees under `.turf/worktrees/<task-id>`. Each running agent has an independent working copy. When an agent finishes, TurfCode merges the branch back into `main`.
+- **Worker Invariant:** Agents must never write directly to the primary checkout directory while parallel tasks are active.
+
+---
+
+## [MD-023] 2026-11-03: Fail-Fast Lock Conflict Handling
+- **Context:** Action taken when an agent or peer attempts to modify a locked file.
+- **The Fork:** Fail-fast with explicit diagnostic vs. background sleep and retry queue.
+- **Resolution:** Option A: Fail-fast with diagnostic. The operation aborts immediately, alerting the user to the conflict and identifying who holds the lock. Prevents silent token burn during lock contention.
+- **Worker Invariant:** Reject blocked file writes immediately at the pre-flight check before touching the filesystem.
+
+---
+
+## [MD-024] 2026-11-03: Agent Pause on Peer Disconnect
+- **Context:** Managing agent processes if the sponsoring peer experiences a network drop.
+- **The Fork:** Agent continues unattended vs. agent pauses until peer reconnects.
+- **Resolution:** Option B: Agent Pauses on Disconnect. If Ayush's connection drops, his running agent is sent `SIGSTOP` or placed on hold. When Ayush reconnects, execution resumes, ensuring the peer doesn't lose oversight of agent actions.
+- **Worker Invariant:** Process state must transition to `PAUSED` and broadcast to the Intent Board upon peer heartbeat loss.
+
+---
+
+## [MD-025] 2026-11-03: Code-Only Open Room Access
+- **Context:** Streamlining the peer onboarding experience.
+- **The Fork:** Code + Host Approval pop-up vs. Code-Only direct join.
+- **Resolution:** Option B: Code-Only Direct Join for MVP. Anyone possessing the 6-character session code enters the turf immediately without requiring the host to click an approval dialog.
+- **Worker Invariant:** Session codes must use cryptographically secure random alphanumeric tokens (e.g. `TURF-7A9B`).
+
+---
+
+## [MD-026] 2026-11-03: Per-User Local Command History
+- **Context:** Arrow-key command recall in the terminal input box.
+- **The Fork:** Per-user isolated history vs. global shared turf history.
+- **Resolution:** Option A: Per-user local command history saved to `~/.turf/history`. Each developer cycles through their own past prompts and commands.
+- **Worker Invariant:** Up/Down arrow keypresses must query local client history exclusively.
+
+---
+
+## [MD-027] 2026-11-03: Interactive File Tree with Live Padlock Badges
+- **Context:** Navigating and inspecting workspace files from within the TUI.
+- **The Fork:** Toggleable interactive file tree on Intent Board vs. task-only display.
+- **Resolution:** Option A: Toggleable interactive file tree (`[F]` key). Displays directory hierarchy with bright red `🔒` padlock badges beside files held by active locks.
+- **Worker Invariant:** File tree must render dynamically using cached git index to avoid blocking on large `node_modules` folders.
+
+---
+
+## [MD-028] 2026-11-03: Distribution via Global NPM Package
+- **Context:** Package packaging and user installation workflow.
+- **The Fork:** Pure Node.js ESM package (`npm install -g turfcode` / `npx turfcode`) vs. standalone compiled binary.
+- **Resolution:** Option A: Global NPM package (`npx turfcode`). Instant cross-platform compatibility across Windows (PowerShell/WSL), macOS, and Linux on Node.js 20+.
+- **Worker Invariant:** Must declare `"type": "module"`, specify executable bin in `package.json`, and run zero native compilation steps during install.
