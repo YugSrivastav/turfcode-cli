@@ -1,0 +1,706 @@
+/**
+ * TurfCode CLI - Electric Lime Cockpit
+ * 
+ * 2-section Blessed TUI cockpit layout:
+ * - 30% Intent Board (Tasks, File Locks, Active Peers, Collapsible)
+ * - 70% Terminal & Agent Pane (Multi-tab, Output Log, Subprocess Streaming, Input Box)
+ * 
+ * Complies with [MD-001], [MD-004], [MD-028], [MD-032], [MD-038].
+ */
+
+import blessed from 'blessed';
+import { spawn } from 'child_process';
+import path from 'path';
+import { PALETTE, TAGS, BLESSED_STYLES } from './theme.js';
+
+export function createCockpit(options = {}) {
+  const {
+    mode = 'host',
+    roomCode = 'TURF-DEMO',
+    cwd = process.cwd(),
+    userName = mode === 'host' ? 'Host' : 'Peer',
+    role = mode === 'host' ? 'Host' : 'Peer',
+    initialTasks = [],
+    initialLocks = [],
+    initialPeers = [],
+    screenOptions = {}
+  } = options;
+
+  let currentDir = cwd;
+  let isSidebarCollapsed = false;
+  let focusIndex = 2; // 0: Sidebar, 1: Terminal Log, 2: Input Box (default focused)
+  let activeTabIndex = 0;
+
+  // Initialize State
+  const tasks = initialTasks.length > 0 ? [...initialTasks] : [
+    { id: '1', title: 'Initialize Electric Lime Cockpit', assignee: userName, status: 'in_progress' },
+    { id: '2', title: 'Connect Tunnel & Lock Manager', assignee: 'Team', status: 'queued' },
+    { id: '0', title: 'Repository & Architecture Spec', assignee: 'Yug', status: 'done' }
+  ];
+
+  const locks = initialLocks.length > 0 ? [...initialLocks] : [];
+
+  const peers = initialPeers.length > 0 ? [...initialPeers] : [
+    { name: userName, role: role, isSelf: true }
+  ];
+
+  // 1. Create Blessed Screen
+  const screen = blessed.screen({
+    smartCSR: true,
+    title: `TurfCode Cockpit [${roomCode}]`,
+    dockBorders: true,
+    useBCE: true,
+    fullUnicode: true,
+    style: {
+      bg: PALETTE.bg,
+      fg: PALETTE.textBright
+    },
+    ...screenOptions
+  });
+
+  // 2. Top Header Bar
+  const header = blessed.box({
+    parent: screen,
+    ...BLESSED_STYLES.header,
+    content: ` {bold}{#39ff14-fg}TURFCODE{/#39ff14-fg}{/bold} │ Room: {bold}{#eab308-fg}${roomCode}{/#eab308-fg}{/bold} │ Mode: {bold}{#39ff14-fg}${mode.toUpperCase()}{/#39ff14-fg}{/bold} │ User: {#06b6d4-fg}${userName}{/#06b6d4-fg} │ Dir: {#4a7c4a-fg}${path.basename(currentDir) || currentDir}{/#4a7c4a-fg}`
+  });
+
+  // 3. Left Sidebar (30% Intent Board)
+  const sidebar = blessed.box({
+    parent: screen,
+    top: 1,
+    left: 0,
+    width: '30%',
+    height: '100%-2',
+    style: {
+      bg: PALETTE.bg
+    }
+  });
+
+  // 3a. Tasks Container (MD-037 4-field schema)
+  const tasksBox = blessed.box({
+    parent: sidebar,
+    top: 0,
+    left: 0,
+    width: '100%',
+    height: '48%',
+    label: ` {bold}{#39ff14-fg}📋 INTENT & TASKS{/#39ff14-fg}{/bold} `,
+    border: { type: 'line', fg: PALETTE.mutedBorder },
+    tags: true,
+    scrollable: true,
+    alwaysScroll: true,
+    mouse: true,
+    keys: true,
+    vi: true,
+    style: {
+      fg: PALETTE.textBright,
+      bg: PALETTE.bg,
+      border: { fg: PALETTE.mutedBorder }
+    }
+  });
+
+  function renderTasks() {
+    if (!tasks || tasks.length === 0) {
+      tasksBox.setContent(`\n ${TAGS.dim('(No tasks in intent queue)')}`);
+      return;
+    }
+    const lines = tasks.map(t => {
+      const badge = TAGS.badge(t.status.toUpperCase().replace('_', ' '), t.status);
+      return ` ${badge} {#f0fff0-fg}#${t.id}: ${t.title}{/#f0fff0-fg}\n   ${TAGS.dim(`↳ Assignee: ${t.assignee}`)}`;
+    });
+    tasksBox.setContent(lines.join('\n\n'));
+  }
+
+  // 3b. File Lock Table (MD-002, MD-040)
+  const locksBox = blessed.box({
+    parent: sidebar,
+    top: '48%',
+    left: 0,
+    width: '100%',
+    height: '28%',
+    label: ` {bold}{#ef4444-fg}🔒 FILE LOCK TABLE{/#ef4444-fg}{/bold} `,
+    border: { type: 'line', fg: PALETTE.mutedBorder },
+    tags: true,
+    scrollable: true,
+    mouse: true,
+    style: {
+      fg: PALETTE.textBright,
+      bg: PALETTE.bg,
+      border: { fg: PALETTE.mutedBorder }
+    }
+  });
+
+  function renderLocks() {
+    if (!locks || locks.length === 0) {
+      locksBox.setContent(`\n ${TAGS.dim('(No active file locks - workspace free)')}`);
+      return;
+    }
+    const lines = locks.map(l => {
+      return ` {#ef4444-fg}🔒 ${l.file}{/#ef4444-fg} ${TAGS.dim(`[Held by ${l.holder}]`)}`;
+    });
+    locksBox.setContent(lines.join('\n'));
+  }
+
+  // 3c. Connected Peers Container
+  const peersBox = blessed.box({
+    parent: sidebar,
+    top: '76%',
+    left: 0,
+    width: '100%',
+    height: '100%-76%-3',
+    label: ` {bold}{#06b6d4-fg}👥 CONNECTED PEERS{/#06b6d4-fg}{/bold} `,
+    border: { type: 'line', fg: PALETTE.mutedBorder },
+    tags: true,
+    scrollable: true,
+    mouse: true,
+    style: {
+      fg: PALETTE.textBright,
+      bg: PALETTE.bg,
+      border: { fg: PALETTE.mutedBorder }
+    }
+  });
+
+  function renderPeers() {
+    if (!peers || peers.length === 0) {
+      peersBox.setContent(`\n ${TAGS.dim('(Solo session)')}`);
+      return;
+    }
+    const lines = peers.map(p => {
+      const dot = TAGS.lime('●');
+      const selfLabel = p.isSelf ? ` ${TAGS.limeBold('(You)')}` : '';
+      return ` ${dot} {#f0fff0-fg}${p.name}{/#f0fff0-fg}${selfLabel} ${TAGS.cyan(`[${p.role}]`)}`;
+    });
+    peersBox.setContent(lines.join('\n'));
+  }
+
+  // 3d. Sidebar Collapse Button
+  const collapseBtn = blessed.button({
+    parent: sidebar,
+    bottom: 0,
+    left: 0,
+    width: '100%',
+    height: 3,
+    border: { type: 'line', fg: PALETTE.mutedBorder },
+    content: ` {bold}{#39ff14-fg}«{/#39ff14-fg} Collapse Sidebar {/bold}${TAGS.dim('[Ctrl+B]')}`,
+    tags: true,
+    mouse: true,
+    style: {
+      fg: PALETTE.textBright,
+      bg: PALETTE.bg,
+      border: { fg: PALETTE.mutedBorder },
+      hover: { bg: PALETTE.headerBg },
+      focus: { border: { fg: PALETTE.activeBorder } }
+    }
+  });
+
+  // 4. Right Container (70% Terminal & Agent Pane)
+  const terminalPane = blessed.box({
+    parent: screen,
+    top: 1,
+    left: '30%',
+    width: '70%',
+    height: '100%-2',
+    border: { type: 'line', fg: PALETTE.mutedBorder },
+    tags: true,
+    style: {
+      fg: PALETTE.textBright,
+      bg: PALETTE.bg,
+      border: { fg: PALETTE.mutedBorder }
+    }
+  });
+
+  // 4a. Tab Bar
+  const tabBar = blessed.box({
+    parent: terminalPane,
+    top: 0,
+    left: 0,
+    width: '100%-2',
+    height: 1,
+    tags: true,
+    mouse: true,
+    style: {
+      fg: PALETTE.textMuted,
+      bg: PALETTE.headerBg
+    }
+  });
+
+  // Define Tabs: 1: Shell, 2: Agent (agy), 3: Agent 2
+  const tabs = [
+    {
+      id: 'shell',
+      name: '1: Shell',
+      log: null,
+      activeProc: null,
+      history: []
+    },
+    {
+      id: 'agent-1',
+      name: '2: agy (Host)',
+      log: null,
+      activeProc: null,
+      history: []
+    },
+    {
+      id: 'agent-2',
+      name: '3: agy (Peer)',
+      log: null,
+      activeProc: null,
+      history: []
+    }
+  ];
+
+  // Create Log widgets for each Tab inside terminalPane
+  tabs.forEach((tab, index) => {
+    tab.log = blessed.log({
+      parent: terminalPane,
+      top: 1,
+      left: 0,
+      width: '100%-2',
+      height: '100%-5',
+      scrollable: true,
+      alwaysScroll: true,
+      tags: true,
+      keys: true,
+      vi: true,
+      mouse: true,
+      hidden: index !== 0,
+      style: {
+        fg: PALETTE.textBright,
+        bg: PALETTE.bg
+      }
+    });
+  });
+
+  function renderTabs() {
+    const tabParts = tabs.map((t, idx) => {
+      const active = idx === activeTabIndex;
+      if (active) {
+        return `{bold}{#081008-bg}{#39ff14-fg} [ ${t.name} ] {/#39ff14-fg}{/#081008-bg}{/bold}`;
+      } else {
+        return `{#4a7c4a-fg} [ ${t.name} ] {/#4a7c4a-fg}`;
+      }
+    });
+    tabParts.push(`{#2a5a2a-fg}[ + New ]{/#2a5a2a-fg}`);
+    tabBar.setContent(` ${tabParts.join(' ')}`);
+  }
+
+  function printWelcomeBanner(log) {
+    log.log(`{#1b3b1b-fg}┌─────────────────────────────────────────────────────────────┐{/#1b3b1b-fg}`);
+    log.log(`{#1b3b1b-fg}│{/#1b3b1b-fg}  {bold}{#39ff14-fg}TURFCODE ELECTRIC LIME COCKPIT v0.1.0{/#39ff14-fg}{/bold} — {#22c55e-fg}READY{/#22c55e-fg}             {#1b3b1b-fg}│{/#1b3b1b-fg}`);
+    log.log(`{#1b3b1b-fg}│{/#1b3b1b-fg}  Session: {#eab308-fg}${roomCode}{/#eab308-fg}  │ Mode: {#39ff14-fg}${mode.toUpperCase()}{/#39ff14-fg}  │ Directory: {#4a7c4a-fg}${currentDir}{/#4a7c4a-fg} {#1b3b1b-fg}│{/#1b3b1b-fg}`);
+    log.log(`{#1b3b1b-fg}│{/#1b3b1b-fg}  Multi-Agent Terminal: Parallel execution without screen wipe {#1b3b1b-fg}│{/#1b3b1b-fg}`);
+    log.log(`{#1b3b1b-fg}│{/#1b3b1b-fg}  [Ctrl+B] Toggle Sidebar │ [Ctrl+1..9] Tabs │ [Tab] Focus    {#1b3b1b-fg}│{/#1b3b1b-fg}`);
+    log.log(`{#1b3b1b-fg}└─────────────────────────────────────────────────────────────┘{/#1b3b1b-fg}\n`);
+  }
+
+  // 4b. Command / Prompt Input Box
+  const inputContainer = blessed.box({
+    parent: terminalPane,
+    bottom: 0,
+    left: 0,
+    width: '100%-2',
+    height: 3,
+    border: { type: 'line', fg: PALETTE.activeBorder },
+    label: ` {bold}{#39ff14-fg}✍️ Command / Agent Prompt{/#39ff14-fg}{/bold} `,
+    tags: true,
+    mouse: true,
+    style: {
+      fg: PALETTE.textBright,
+      bg: PALETTE.bg,
+      border: { fg: PALETTE.activeBorder }
+    }
+  });
+
+  const promptPrefix = blessed.text({
+    parent: inputContainer,
+    top: 0,
+    left: 1,
+    tags: true,
+    content: `{bold}{#39ff14-fg}turf >{/#39ff14-fg}{/bold} `
+  });
+
+  const inputBox = blessed.textbox({
+    parent: inputContainer,
+    top: 0,
+    left: 8,
+    width: '100%-10',
+    height: 1,
+    keys: true,
+    mouse: true,
+    inputOnFocus: true,
+    style: {
+      fg: PALETTE.electricLime,
+      bg: PALETTE.bg
+    }
+  });
+
+  // 5. Bottom Footer Bar
+  const footer = blessed.box({
+    parent: screen,
+    ...BLESSED_STYLES.footer,
+    content: ` {bold}{#39ff14-fg}[Tab]{/#39ff14-fg}{/bold} Focus │ {bold}{#39ff14-fg}[Ctrl+B]{/#39ff14-fg}{/bold} Sidebar │ {bold}{#39ff14-fg}[Ctrl+1..9]{/#39ff14-fg}{/bold} Tabs │ {bold}{#39ff14-fg}[Ctrl+C]{/#39ff14-fg}{/bold} Clear │ {bold}{#39ff14-fg}[Enter]{/#39ff14-fg}{/bold} Run `
+  });
+
+  // Helper: Get Active Tab & Log
+  function getActiveTab() {
+    return tabs[activeTabIndex];
+  }
+
+  function getActiveLog() {
+    return tabs[activeTabIndex].log;
+  }
+
+  // Focus Management Function (Tab cycling)
+  function setFocus(idx) {
+    focusIndex = (idx + 3) % 3;
+
+    // Reset all borders to muted
+    tasksBox.style.border.fg = PALETTE.mutedBorder;
+    terminalPane.style.border.fg = PALETTE.mutedBorder;
+    inputContainer.style.border.fg = PALETTE.mutedBorder;
+
+    if (focusIndex === 0) {
+      // Focus Sidebar (Intent Board)
+      tasksBox.style.border.fg = PALETTE.activeBorder;
+      tasksBox.focus();
+    } else if (focusIndex === 1) {
+      // Focus Terminal Log
+      terminalPane.style.border.fg = PALETTE.activeBorder;
+      getActiveLog().focus();
+    } else {
+      // Focus Input Box
+      inputContainer.style.border.fg = PALETTE.activeBorder;
+      inputBox.focus();
+      inputBox.readInput();
+    }
+    screen.render();
+  }
+
+  function cycleFocus() {
+    setFocus(focusIndex + 1);
+  }
+
+  // Sidebar Collapse / Expand (Ctrl+B)
+  function toggleSidebar() {
+    isSidebarCollapsed = !isSidebarCollapsed;
+
+    if (isSidebarCollapsed) {
+      sidebar.width = 4;
+      tasksBox.hide();
+      locksBox.hide();
+      peersBox.hide();
+      collapseBtn.top = 0;
+      collapseBtn.height = '100%-2';
+      collapseBtn.setContent(' »');
+      terminalPane.left = 4;
+      terminalPane.width = '100%-4';
+    } else {
+      sidebar.width = '30%';
+      tasksBox.show();
+      locksBox.show();
+      peersBox.show();
+      collapseBtn.top = undefined;
+      collapseBtn.bottom = 0;
+      collapseBtn.height = 3;
+      collapseBtn.setContent(` {bold}{#39ff14-fg}«{/#39ff14-fg} Collapse Sidebar {/bold}${TAGS.dim('[Ctrl+B]')}`);
+      terminalPane.left = '30%';
+      terminalPane.width = '70%';
+    }
+    screen.render();
+  }
+
+  collapseBtn.on('press', toggleSidebar);
+
+  // Tab Switching Function (Ctrl+1 through Ctrl+9)
+  function switchTab(index) {
+    if (index < 0 || index >= tabs.length) return;
+    if (index === activeTabIndex) return;
+
+    tabs[activeTabIndex].log.hide();
+    activeTabIndex = index;
+    tabs[activeTabIndex].log.show();
+
+    renderTabs();
+    if (focusIndex === 1) {
+      tabs[activeTabIndex].log.focus();
+    }
+    screen.render();
+  }
+
+  // Subprocess Execution: NEVER call screen.spawn(), pipe stdout/stderr to log box
+  function spawnTerminalProcess(command, args = [], spawnOpts = {}) {
+    const activeTab = getActiveTab();
+    const log = activeTab.log;
+
+    let procCmd = command;
+    let procArgs = args;
+    const isWin = process.platform === 'win32';
+
+    if (!Array.isArray(args) || args.length === 0) {
+      const shellExe = isWin ? 'powershell.exe' : (process.env.SHELL || 'bash');
+      procArgs = isWin
+        ? ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', command]
+        : ['-c', command];
+      procCmd = shellExe;
+    }
+
+    const env = {
+      ...process.env,
+      TURF_ROOM: roomCode,
+      TURF_USER: userName,
+      TURF_ROLE: role,
+      ...spawnOpts.env
+    };
+
+    const runCwd = spawnOpts.cwd || currentDir;
+
+    log.log(`${TAGS.dim('[EXEC]')} ${TAGS.lime(command)} ${Array.isArray(args) && args.length > 0 ? TAGS.dim(args.join(' ')) : ''}`);
+    screen.render();
+
+    let proc;
+    try {
+      proc = spawn(procCmd, procArgs, {
+        cwd: runCwd,
+        env,
+        detached: !isWin
+      });
+    } catch (err) {
+      log.log(`${TAGS.red(`[SPAWN ERROR] Failed to launch ${command}: ${err.message}`)}`);
+      screen.render();
+      return null;
+    }
+
+    activeTab.activeProc = proc;
+
+    proc.stdout.on('data', (data) => {
+      const lines = data.toString().split(/\r?\n/);
+      for (const line of lines) {
+        if (line.trim().length > 0) {
+          log.log(line);
+        }
+      }
+      screen.render();
+    });
+
+    proc.stderr.on('data', (data) => {
+      const lines = data.toString().split(/\r?\n/);
+      for (const line of lines) {
+        if (line.trim().length > 0) {
+          log.log(TAGS.red(line));
+        }
+      }
+      screen.render();
+    });
+
+    proc.on('close', (code, signal) => {
+      activeTab.activeProc = null;
+      if (code !== 0 && code !== null) {
+        log.log(`${TAGS.dim('[PROCESS]')} ${TAGS.red(`Exited with code ${code}${signal ? ` (${signal})` : ''}`)}`);
+      } else {
+        log.log(`${TAGS.dim('[PROCESS]')} ${TAGS.lime('Completed successfully')}`);
+      }
+      screen.render();
+    });
+
+    proc.on('error', (err) => {
+      activeTab.activeProc = null;
+      log.log(`${TAGS.red(`[PROCESS ERROR] ${err.message}`)}`);
+      screen.render();
+    });
+
+    return proc;
+  }
+
+  // Handle Input Submission
+  inputBox.on('submit', (value) => {
+    const inputStr = (value || '').trim();
+    inputBox.clearValue();
+
+    if (!inputStr) {
+      setFocus(2);
+      return;
+    }
+
+    const activeTab = getActiveTab();
+
+    // Built-in commands
+    if (inputStr === 'clear' || inputStr === 'cls') {
+      activeTab.log.setContent('');
+      printWelcomeBanner(activeTab.log);
+      setFocus(2);
+      return;
+    }
+
+    if (inputStr === 'exit' || inputStr === ':quit' || inputStr === ':q') {
+      destroy();
+      process.exit(0);
+      return;
+    }
+
+    if (inputStr.startsWith('cd ')) {
+      const targetDir = inputStr.substring(3).trim();
+      currentDir = path.resolve(currentDir, targetDir);
+      header.setContent(` {bold}{#39ff14-fg}TURFCODE{/#39ff14-fg}{/bold} │ Room: {bold}{#eab308-fg}${roomCode}{/#eab308-fg}{/bold} │ Mode: {bold}{#39ff14-fg}${mode.toUpperCase()}{/#39ff14-fg}{/bold} │ User: {#06b6d4-fg}${userName}{/#06b6d4-fg} │ Dir: {#4a7c4a-fg}${path.basename(currentDir) || currentDir}{/#4a7c4a-fg}`);
+      activeTab.log.log(`${TAGS.cyan('Directory changed to:')} ${TAGS.lime(currentDir)}`);
+      setFocus(2);
+      return;
+    }
+
+    if (inputStr.startsWith('/tab ')) {
+      const tabNum = parseInt(inputStr.substring(5).trim(), 10);
+      if (!isNaN(tabNum) && tabNum >= 1 && tabNum <= tabs.length) {
+        switchTab(tabNum - 1);
+      }
+      setFocus(2);
+      return;
+    }
+
+    if (inputStr === '/sidebar' || inputStr === '/b') {
+      toggleSidebar();
+      setFocus(2);
+      return;
+    }
+
+    // Execute through spawnTerminalProcess
+    spawnTerminalProcess(inputStr);
+    setFocus(2);
+  });
+
+  // Keybindings ([MD-032])
+  // 1. Tab: Cycle Focus
+  screen.key(['tab'], () => {
+    cycleFocus();
+  });
+
+  // 2. Ctrl+B: Toggle Sidebar
+  screen.key(['C-b'], () => {
+    toggleSidebar();
+  });
+
+  // 3. Ctrl+1 through Ctrl+9: Switch Tabs
+  const numKeys = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
+  numKeys.forEach((n, idx) => {
+    screen.key([`C-${n}`, `M-${n}`], () => {
+      switchTab(idx);
+    });
+  });
+
+  // Keypress listener fallback for Ctrl+Number in various terminals
+  screen.on('keypress', (ch, key) => {
+    if (!key) return;
+    if (key.ctrl && !key.meta) {
+      const digit = parseInt(key.name || ch, 10);
+      if (!isNaN(digit) && digit >= 1 && digit <= 9) {
+        switchTab(digit - 1);
+      }
+    }
+  });
+
+  // 4. Ctrl+C: Clear Input Box / Interrupt Process
+  screen.key(['C-c'], () => {
+    const activeTab = getActiveTab();
+    if (inputBox.getValue && inputBox.getValue().length > 0) {
+      inputBox.clearValue();
+      setFocus(2);
+      return;
+    }
+
+    if (activeTab.activeProc) {
+      try {
+        if (process.platform === 'win32') {
+          spawn('taskkill', ['/F', '/T', '/PID', activeTab.activeProc.pid]);
+        } else {
+          process.kill(-activeTab.activeProc.pid, 'SIGINT');
+        }
+      } catch {
+        try {
+          activeTab.activeProc.kill('SIGINT');
+        } catch {
+          // ignore already exited process
+        }
+      }
+      activeTab.log.log(TAGS.red('^C (Process Interrupted)'));
+      activeTab.activeProc = null;
+      screen.render();
+      setFocus(2);
+      return;
+    }
+
+    // If input was empty and no process, clean clear & refocus
+    inputBox.clearValue();
+    setFocus(2);
+  });
+
+  // Click handlers for mouse navigation
+  tasksBox.on('click', () => setFocus(0));
+  terminalPane.on('click', () => setFocus(1));
+  inputContainer.on('click', () => setFocus(2));
+  inputBox.on('click', () => setFocus(2));
+
+  // Initialize UI content
+  renderTasks();
+  renderLocks();
+  renderPeers();
+  renderTabs();
+  tabs.forEach(t => printWelcomeBanner(t.log));
+
+  // Initial focus on input box
+  setFocus(2);
+
+  function destroy() {
+    tabs.forEach(t => {
+      if (t.activeProc) {
+        try {
+          t.activeProc.kill('SIGKILL');
+        } catch {}
+      }
+    });
+    try {
+      if (screen.program) {
+        screen.program.destroy();
+      }
+      screen.destroy();
+    } catch {}
+    if (process.stdin && typeof process.stdin.pause === 'function') {
+      process.stdin.pause();
+    }
+  }
+
+  return {
+    screen,
+    header,
+    sidebar,
+    tasksBox,
+    locksBox,
+    peersBox,
+    collapseBtn,
+    terminalPane,
+    tabBar,
+    tabs,
+    inputContainer,
+    inputBox,
+    footer,
+    tasks,
+    locks,
+    peers,
+    get isSidebarCollapsed() {
+      return isSidebarCollapsed;
+    },
+    get activeTabIndex() {
+      return activeTabIndex;
+    },
+    get focusIndex() {
+      return focusIndex;
+    },
+    setFocus,
+    cycleFocus,
+    toggleSidebar,
+    switchTab,
+    spawnTerminalProcess,
+    renderTasks,
+    renderLocks,
+    renderPeers,
+    renderTabs,
+    destroy
+  };
+}
