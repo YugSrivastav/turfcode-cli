@@ -8,7 +8,7 @@ use turf_protocol::intent::{TaskCard, TaskStatus};
 use turf_protocol::locks::FileLock;
 use turf_tui::layout::CockpitLayout;
 use turf_tui::pane::SplitDirection;
-use turf_tui::theme::{COLOR_BG, COLOR_ELECTRIC_LIME};
+use turf_tui::theme::{COLOR_ACCENT, COLOR_ACTIVE_PILL, COLOR_ELECTRIC_LIME};
 use turf_tui::{FocusArea, TerminalCockpit};
 
 #[test]
@@ -263,10 +263,10 @@ fn test_headless_rendering_cockpit_full_surface() {
         row0_text
     );
 
-    // Verify Active Pill styling: background should be Electric Lime
+    // Verify Active Pill styling: Catppuccin active pill background and accent fg
     let pill_cell = buffer.cell((layout.tab_strip_area.x + 1, 0)).unwrap();
-    assert_eq!(pill_cell.bg, COLOR_ELECTRIC_LIME);
-    assert_eq!(pill_cell.fg, COLOR_BG);
+    assert_eq!(pill_cell.bg, COLOR_ACTIVE_PILL);
+    assert_eq!(pill_cell.fg, COLOR_ACCENT);
 
     // Verify Sidebar single vertical divider (│) on column 26
     let div_x = layout.sidebar_divider.x;
@@ -283,10 +283,10 @@ fn test_headless_rendering_cockpit_full_surface() {
         }
         sidebar_text.push('\n');
     }
-    assert!(sidebar_text.contains("SPACES"));
-    assert!(sidebar_text.contains("INTENTS & TASKS"));
-    assert!(sidebar_text.contains("ACTIVE LOCKS"));
-    assert!(sidebar_text.contains("PEERS"));
+    assert!(sidebar_text.contains("spaces"));
+    assert!(sidebar_text.contains("intents & tasks"));
+    assert!(sidebar_text.contains("active locks"));
+    assert!(sidebar_text.contains("peers"));
     assert!(sidebar_text.contains("Build Ra"));
     assert!(sidebar_text.contains("src/cockpit.rs"));
 
@@ -300,24 +300,29 @@ fn test_headless_rendering_cockpit_full_surface() {
     for x in layout.main_area.x..120 {
         prompt_row.push_str(buffer.cell((x, prompt_y)).unwrap().symbol());
     }
-    assert!(prompt_row.contains("turf > "));
-    assert!(prompt_row.contains("[Tab] Focus"));
-    assert!(prompt_row.contains("[Ctrl+Q] Quit"));
+    assert!(prompt_row.contains("> "));
+    assert!(prompt_row.contains("« ? for shortcuts"));
 }
 
 #[test]
 fn test_keyboard_events_and_commands() {
     let mut cockpit = TerminalCockpit::new_headless("TURF-TEST", "HOST", "tester", 24, 80);
 
-    // Ctrl+B toggles sidebar
+    // Alt+B toggles sidebar
     assert!(cockpit.sidebar_visible);
-    cockpit.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    cockpit.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT));
     assert!(!cockpit.sidebar_visible);
-    cockpit.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    cockpit.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT));
     assert!(cockpit.sidebar_visible);
 
-    // Tab key cycles focus
-    cockpit.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    // In Terminal focus, Tab writes directly to PTY instead of hijacking focus
+    assert_eq!(cockpit.focus, FocusArea::Terminal);
+    let handled = cockpit.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert!(handled);
+    assert_eq!(cockpit.focus, FocusArea::Terminal);
+
+    // Alt+Enter toggles prompt focus
+    cockpit.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
     assert_eq!(cockpit.focus, FocusArea::Input);
 
     // Typing in Input mode
@@ -337,8 +342,8 @@ fn test_keyboard_events_and_commands() {
     // /sidebar toggles sidebar
     assert!(!cockpit.sidebar_visible);
 
-    // Ctrl+Q exits
+    // Alt+Q or Ctrl+Q exits
     assert!(!cockpit.should_exit);
-    cockpit.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
+    cockpit.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::ALT));
     assert!(cockpit.should_exit);
 }

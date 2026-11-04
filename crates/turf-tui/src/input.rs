@@ -1,13 +1,13 @@
 //! Single-line bottom prompt separated from terminal output by a single `─` divider,
-//! with right-aligned keybinding shortcuts.
+//! with right-aligned helper text.
 //!
-//! Conforms to [MD-044] and Firstmate specification.
+//! Conforms to [MD-044] and [MD-050].
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 
-use crate::theme::{Theme, COLOR_BG, COLOR_ELECTRIC_LIME, GLYPH_DIVIDER_H};
+use crate::theme::{Theme, COLOR_ACCENT, COLOR_BG, COLOR_TEXT_DIM, GLYPH_DIVIDER_H};
 
 /// Input state maintaining user text, cursor index, and command history.
 #[derive(Debug, Clone, Default)]
@@ -112,7 +112,7 @@ pub fn render_input_bar(
     is_focused: bool,
     buf: &mut Buffer,
 ) {
-    // 1. Draw single horizontal divider (─) separating terminal output from input
+    // 1. Draw single horizontal hairline divider (─) separating terminal output from input
     if divider_area.height > 0 && divider_area.width > 0 {
         let div_style = if is_focused {
             Theme::active_divider()
@@ -140,8 +140,8 @@ pub fn render_input_bar(
         cell.set_style(Style::default());
     }
 
-    // Render `turf > ` prompt leader
-    let prefix = "turf > ";
+    // Render minimal `> ` prompt leader
+    let prefix = "> ";
     let mut cursor_x = input_area.x;
     for ch in prefix.chars() {
         if cursor_x >= input_area.x + input_area.width {
@@ -153,24 +153,14 @@ pub fn render_input_bar(
         cursor_x += 1;
     }
 
-    // Shortcuts string on the right
-    let shortcuts: [(&str, &str); 5] = [
-        ("[Tab]", "Focus"),
-        ("[Ctrl+B]", "Sidebar"),
-        ("[Ctrl+T]", "Tab"),
-        ("[Ctrl+S]", "Split"),
-        ("[Ctrl+Q]", "Quit"),
-    ];
-
-    let mut shortcut_total_len = 0;
-    for (k, d) in &shortcuts {
-        shortcut_total_len += k.len() + 1 + d.len() + 2;
-    }
+    // Right-aligned helper text: `« ? for shortcuts`
+    let helper_text = "« ? for shortcuts";
+    let helper_len = helper_text.chars().count();
 
     let input_available_w = input_area
         .width
         .saturating_sub(prefix.len() as u16)
-        .saturating_sub(shortcut_total_len as u16 + 2);
+        .saturating_sub(helper_len as u16 + 2);
 
     // Render input string
     let chars: Vec<char> = state.value.chars().collect();
@@ -182,7 +172,7 @@ pub fn render_input_bar(
         let is_cursor = is_focused && i == state.cursor_pos;
         let style = if is_cursor {
             Style::default()
-                .bg(COLOR_ELECTRIC_LIME)
+                .bg(COLOR_ACCENT)
                 .fg(COLOR_BG)
                 .add_modifier(Modifier::BOLD)
         } else {
@@ -194,50 +184,24 @@ pub fn render_input_bar(
         cell.set_style(style);
     }
 
-    // Render blinking/solid block cursor if at end of string and focused
+    // Render block cursor if at end of string
     if is_focused && state.cursor_pos == chars.len() {
         let px = cursor_x + chars.len() as u16;
         if px < input_area.x + input_area.width {
             let cell = &mut buf[(px, input_area.y)];
-            cell.set_char(' ');
-            cell.set_bg(COLOR_ELECTRIC_LIME);
-            cell.set_fg(COLOR_BG);
+            cell.set_char('█');
+            cell.set_style(Style::default().fg(COLOR_ACCENT).bg(COLOR_BG));
         }
     }
 
-    // Render right-aligned keybinding shortcuts
-    if input_area.width as usize > shortcut_total_len + prefix.len() + 4 {
-        let mut sx = (input_area.x + input_area.width) - (shortcut_total_len as u16);
-        for (key, desc) in shortcuts {
-            // Write key
-            for ch in key.chars() {
-                if sx < input_area.x + input_area.width {
-                    let cell = &mut buf[(sx, input_area.y)];
-                    cell.set_char(ch);
-                    cell.set_style(Theme::shortcut_key());
-                    sx += 1;
-                }
-            }
+    // Render right-aligned helper text: `« ? for shortcuts`
+    if input_area.width as usize > helper_len + prefix.len() + 4 {
+        let mut sx = (input_area.x + input_area.width) - (helper_len as u16) - 1;
+        for ch in helper_text.chars() {
             if sx < input_area.x + input_area.width {
                 let cell = &mut buf[(sx, input_area.y)];
-                cell.set_char(' ');
-                sx += 1;
-            }
-            // Write desc
-            for ch in desc.chars() {
-                if sx < input_area.x + input_area.width {
-                    let cell = &mut buf[(sx, input_area.y)];
-                    cell.set_char(ch);
-                    cell.set_style(Theme::shortcut_desc());
-                    sx += 1;
-                }
-            }
-            if sx + 1 < input_area.x + input_area.width {
-                let cell = &mut buf[(sx, input_area.y)];
-                cell.set_char(' ');
-                sx += 1;
-                let cell = &mut buf[(sx, input_area.y)];
-                cell.set_char(' ');
+                cell.set_char(ch);
+                cell.set_style(Style::default().fg(COLOR_TEXT_DIM).bg(COLOR_BG));
                 sx += 1;
             }
         }
