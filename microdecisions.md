@@ -533,5 +533,46 @@ All crewmates, contributors, and agents MUST adhere to these invariants when mod
 - **Reason:** Provides an immediate, Herdr-grade multi-pane developer cockpit upon creating or joining a turf, with live interactive terminal multiplexing, auto-opened workspace directories, and real-time state synchronization.
 - **Worker Invariant:** ASCII banners must maintain uniform column width across all rows. Cockpit event loops must drain PTY chunks and network deltas at 60fps without blocking user input. Non-interactive environments must safely bypass TUI initialization.
 
+---
+
+## [MD-050] 2026-11-04: Herdr-Grade Visual Architecture, Catppuccin Mocha / Obsidian Slate Theme, Non-Conflicting Alt+Key Navigation, and Uninterrupted PTY Input Streaming
+- **Context:** TurfCode's terminal multiplexer required elevation to true Herdr-grade stability, visual polish, and performance benchmarks based on direct reverse-engineering of Herdr's architecture:
+  1. The global event loop was intercepting raw `Tab` even while focused on the active terminal pane, breaking tab-completion in bash/zsh, and command shortcuts like `Ctrl+W` (delete word in readline/vim), `Ctrl+S` (terminal XOFF / search), and `Ctrl+B` (page up) conflicted with standard terminal applications.
+  2. The neon-green high-contrast block matrix theme filled terminal cell backgrounds with opaque `#081008` green-black, preventing native terminal transparency/blur and causing jarring inverted neon cursor artifacts.
+  3. The left sidebar rendered blocky boxes with giant vertical gaps rather than Herdr's seamless continuous layout with muted lowercase headers and clean hairline dividers.
+  4. The top tab strip and bottom prompt needed sleek full-width chrome matching Herdr (soft blue/slate active tab pill, compact inactive tabs, right-aligned session badge, minimal `> █` prompt, and dimmed `« ? for shortcuts` helper).
+- **The Fork:** Keep the neon matrix theme and Ctrl-based global hotkeys vs. Adopt a refined Catppuccin Mocha / Herdr Dark Slate theme with native `Color::Reset` transparency, non-conflicting `Alt+Key` spatial multiplexer navigation, and 100% transparent PTY key forwarding.
+- **Resolution:**
+  1. **Keyboard & PTY Input Stability:**
+     - Removed the global `Tab` intercept in `handle_key` when focused on `FocusArea::Terminal`. All raw keys (`Tab`, `Enter`, `Backspace`, `Ctrl+C`, `Ctrl+D`, `Ctrl+W`, arrows, letters) now stream 100% directly to the active PTY master via `key_to_bytes` and `pane.write_pty`.
+     - Re-mapped multiplexer hotkeys from intrusive `Ctrl+...` to non-conflicting `Alt+...`: `Alt+T` (new tab), `Alt+W` (close tab), `Alt+1..9` (switch tab), `Alt+V` (vertical split), `Alt+S` (horizontal split), `Alt+B` (toggle sidebar), and `Alt+Enter` (toggle prompt focus).
+     - Preserved `Ctrl+Q` and `Alt+Q` for clean exit.
+  2. **Catppuccin Mocha & Herdr Dark Slate Theme Architecture:**
+     - Updated `crates/turf-tui/src/theme.rs` to the official Catppuccin Mocha / Obsidian Slate palette:
+       - `COLOR_BG = Color::Reset` for true native terminal transparency and blur blending.
+       - `COLOR_HEADER_BG = Color::Rgb(24, 25, 38)` (Catppuccin Mantle #181926).
+       - `COLOR_ACCENT = Color::Rgb(137, 180, 250)` (Catppuccin Blue #89b4fa).
+       - `COLOR_MUTED_BORDER = Color::Rgb(49, 50, 68)` (Catppuccin Surface0 #313244).
+       - `COLOR_TEXT_PRIMARY = Color::Rgb(205, 214, 244)` (Catppuccin Text #cdd6f4).
+       - `COLOR_TEXT_MUTED = Color::Rgb(108, 112, 134)` (Catppuccin Overlay0 #6c7086).
+       - `COLOR_TEXT_DIM = Color::Rgb(88, 91, 112)` (Catppuccin Surface2 #585b70).
+       - `COLOR_ACTIVE_PILL = Color::Rgb(30, 32, 48)` (Catppuccin Crust / dark slate highlight).
+       - `COLOR_GREEN_DOT = Color::Rgb(166, 227, 161)` (Catppuccin Green #a6e3a1).
+       - `COLOR_CYAN = Color::Rgb(137, 220, 235)` (Catppuccin Sky #89dceb).
+  3. **Zero-Artifact VTE Cell Blitting & Steady Cursor:**
+     - In `vte_blit.rs`, mapped `VteColor::Default` background to `RatColor::Reset` and trailing/empty cells to `RatColor::Reset`.
+     - Replaced neon green inverted cursor artifacting with a clean reverse-video steady block cursor (`Modifier::REVERSED` with `COLOR_TEXT_PRIMARY`).
+  4. **Continuous Seamless Sidebar Architecture:**
+     - Replaced rectangular box containers with a continuous, unified sidebar layout (`row_gap = 0`, background `Color::Reset`).
+     - Rendered lowercase muted headers: `spaces`, `intents & tasks ({})`, `active locks ({})`, and `peers ({})`.
+     - Top spaces section displays `○ <dir>` with branch in subtle cyan (`COLOR_CYAN`).
+     - Bottom peers section renders active user capsule pill (`✓ <username> (you) · host`) on dark slate rounded highlight (`COLOR_ACTIVE_PILL` background, `COLOR_ACCENT` text).
+  5. **Top Tab Bar & Bottom Prompt Chrome:**
+     - Top tab strip: soft blue/slate pill for active tab (` 1: Shell `), compact numbers for inactive tabs (` 2 `), subtle `+` button, and right-aligned session badge (`● TURF-XXXX • HOST`).
+     - Bottom input prompt: single subtle hairline divider (`─`), minimal prompt `> █`, and right-aligned dimmed `« ? for shortcuts` helper text.
+- **Reason:** Restores full terminal utility (tab completion and standard shell keybindings work without multiplexer interference), provides high-end visual elegance matching Herdr, and enables native terminal transparency without jarring color blocks.
+- **Worker Invariant:** Raw `Tab` and readline `Ctrl+...` keystrokes must never be intercepted when terminal panes have focus. Multiplexer control must strictly use `Alt+...` combinations. Default cell backgrounds in VTE blitting must remain `Color::Reset`.
+
+
 
 

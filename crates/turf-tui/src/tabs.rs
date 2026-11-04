@@ -1,15 +1,14 @@
-//! Top row Tab Strip with inverted high-contrast Electric Lime active pill
-//! and right-aligned session metadata.
+//! Top row Tab Strip with sleek Catppuccin / Herdr active capsule pill
+//! and clean right-aligned session badge.
 //!
-//! Conforms to [MD-044] and Firstmate specification.
+//! Conforms to [MD-044] and [MD-050].
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 
 use crate::theme::{
-    Theme, COLOR_BRIGHT_GREEN, COLOR_ELECTRIC_LIME, COLOR_HEADER_BG, COLOR_TEXT_BRIGHT,
-    COLOR_TEXT_DIM, COLOR_TEXT_MUTED,
+    Theme, COLOR_GREEN_DOT, COLOR_HEADER_BG, COLOR_TEXT_DIM, COLOR_TEXT_MUTED, COLOR_TEXT_PRIMARY,
 };
 
 /// Represents a tab metadata descriptor.
@@ -26,14 +25,14 @@ pub fn render_tab_strip(
     active_tab_index: usize,
     session_code: &str,
     role: &str,
-    username: &str,
+    _username: &str,
     buf: &mut Buffer,
 ) {
     if area.height == 0 || area.width == 0 {
         return;
     }
 
-    // 1. Fill entire strip with header background (#0d1a0d)
+    // 1. Fill entire strip with header background (#181926)
     for x in area.x..(area.x + area.width) {
         let cell = &mut buf[(x, area.y)];
         cell.set_char(' ');
@@ -50,7 +49,11 @@ pub fn render_tab_strip(
         }
 
         let is_active = idx == active_tab_index;
-        let pill_text = format!(" {}: {} ", tab.id, tab.title);
+        let pill_text = if is_active {
+            format!(" {}: {} ", tab.id, tab.title)
+        } else {
+            format!(" {} ", tab.id)
+        };
         let pill_style = if is_active {
             Theme::active_tab_pill()
         } else {
@@ -76,7 +79,7 @@ pub fn render_tab_strip(
         }
     }
 
-    // Render "+" add button
+    // Render "+" subtle add button
     if cursor_x + 2 < area.x + area.width {
         let cell = &mut buf[(cursor_x, area.y)];
         cell.set_char('+');
@@ -88,58 +91,46 @@ pub fn render_tab_strip(
         cell.set_bg(COLOR_HEADER_BG);
     }
 
-    // 3. Render right-aligned session metadata: `● TURF-XXXX • HOST • user`
+    // 3. Render clean right-aligned session badge: `● TURF-XXXX • HOST`
     let meta_dot = "● ";
     let meta_code = session_code;
-    let meta_sep1 = " • ";
+    let meta_sep = " • ";
     let meta_role = role;
-    let meta_sep2 = " • ";
-    let meta_user = username;
     let meta_end = " ";
 
     let total_meta_len = meta_dot.len()
         + meta_code.len()
-        + meta_sep1.len()
+        + meta_sep.len()
         + meta_role.len()
-        + meta_sep2.len()
-        + meta_user.len()
         + meta_end.len();
 
     if area.width as usize > total_meta_len + 4 {
         let mut right_x = (area.x + area.width) - total_meta_len as u16;
 
-        let segments: [(&str, Style); 7] = [
+        let segments: [(&str, Style); 5] = [
             (
                 meta_dot,
                 Style::default()
-                    .fg(COLOR_ELECTRIC_LIME)
+                    .fg(COLOR_GREEN_DOT)
                     .bg(COLOR_HEADER_BG),
             ),
             (
                 meta_code,
                 Style::default()
-                    .fg(COLOR_TEXT_BRIGHT)
+                    .fg(COLOR_TEXT_PRIMARY)
                     .bg(COLOR_HEADER_BG)
                     .add_modifier(Modifier::BOLD),
             ),
             (
-                meta_sep1,
+                meta_sep,
                 Style::default().fg(COLOR_TEXT_DIM).bg(COLOR_HEADER_BG),
             ),
             (
                 meta_role,
                 Style::default()
-                    .fg(COLOR_BRIGHT_GREEN)
+                    .fg(COLOR_TEXT_MUTED)
                     .bg(COLOR_HEADER_BG)
                     .add_modifier(Modifier::BOLD),
-            ),
-            (
-                meta_sep2,
-                Style::default().fg(COLOR_TEXT_DIM).bg(COLOR_HEADER_BG),
-            ),
-            (
-                meta_user,
-                Style::default().fg(COLOR_TEXT_MUTED).bg(COLOR_HEADER_BG),
             ),
             (
                 meta_end,

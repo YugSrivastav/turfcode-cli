@@ -6,16 +6,16 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color as RatColor, Modifier, Style};
 use turf_vte::{Cell, CellFlags, Color as VteColor, NamedColor, ScreenBuffer};
 
-use crate::theme::{COLOR_BG, COLOR_ELECTRIC_LIME, COLOR_TEXT_BRIGHT};
+use crate::theme::COLOR_TEXT_PRIMARY;
 
 /// Convert a `turf_vte::Color` into a `ratatui::style::Color`.
 pub fn vte_color_to_ratatui(color: VteColor, is_bg: bool) -> RatColor {
     match color {
         VteColor::Default => {
             if is_bg {
-                COLOR_BG
+                RatColor::Reset
             } else {
-                COLOR_TEXT_BRIGHT
+                COLOR_TEXT_PRIMARY
             }
         }
         VteColor::Named(named) => match named {
@@ -74,7 +74,7 @@ pub fn vte_flags_to_modifiers(flags: CellFlags) -> Modifier {
 /// Blit an entire `ScreenBuffer` directly into a Ratatui `Buffer` slice bounded by `area`.
 ///
 /// This performs zero heap allocations during the render cycle, providing
-/// 60fps flicker-free terminal blitting.
+/// 60fps flicker-free terminal blitting with native transparency and clean cursor rendering.
 pub fn blit_screen_buffer(
     screen: &ScreenBuffer,
     area: Rect,
@@ -106,15 +106,16 @@ pub fn blit_screen_buffer(
             };
 
             let mut fg = vte_color_to_ratatui(cell.fg, false);
-            let mut bg = vte_color_to_ratatui(cell.bg, true);
+            let bg = vte_color_to_ratatui(cell.bg, true);
             let mut modifier = vte_flags_to_modifiers(cell.flags);
 
-            // Render cursor if this cell matches the cursor coordinate and pane is focused
+            // Render clean cursor using reverse video without neon green artifacts
             if let Some((cx, cy)) = cursor {
                 if cx == x && cy == y && is_focused {
-                    bg = COLOR_ELECTRIC_LIME;
-                    fg = COLOR_BG;
-                    modifier |= Modifier::BOLD;
+                    modifier |= Modifier::REVERSED;
+                    if c == ' ' && (fg == RatColor::Reset || fg == bg) {
+                        fg = COLOR_TEXT_PRIMARY;
+                    }
                 }
             }
 
@@ -125,26 +126,26 @@ pub fn blit_screen_buffer(
             dest_cell.set_style(Style::default().add_modifier(modifier));
         }
 
-        // Blank out any remaining trailing columns if screen width is less than area width
+        // Blank out any remaining trailing columns with Reset background
         for x in cols..(area.width as usize) {
             let dest_x = area.x + x as u16;
             let dest_cell = &mut buf[(dest_x, dest_y)];
             dest_cell.set_char(' ');
-            dest_cell.set_bg(COLOR_BG);
-            dest_cell.set_fg(COLOR_TEXT_BRIGHT);
+            dest_cell.set_bg(RatColor::Reset);
+            dest_cell.set_fg(COLOR_TEXT_PRIMARY);
             dest_cell.set_style(Style::default());
         }
     }
 
-    // Blank out any remaining trailing rows if screen height is less than area height
+    // Blank out any remaining trailing rows with Reset background
     for y in rows..(area.height as usize) {
         let dest_y = area.y + y as u16;
         for x in 0..area.width {
             let dest_x = area.x + x;
             let dest_cell = &mut buf[(dest_x, dest_y)];
             dest_cell.set_char(' ');
-            dest_cell.set_bg(COLOR_BG);
-            dest_cell.set_fg(COLOR_TEXT_BRIGHT);
+            dest_cell.set_bg(RatColor::Reset);
+            dest_cell.set_fg(COLOR_TEXT_PRIMARY);
             dest_cell.set_style(Style::default());
         }
     }

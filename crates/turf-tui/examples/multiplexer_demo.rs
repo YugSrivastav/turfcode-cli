@@ -36,9 +36,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(tab) = c.tabs.get_mut(c.active_tab_index) {
                 if let Some(pane) = tab.pane_manager.active_pane_mut() {
                     pane.terminal.process_str(
-                        "\x1b[1;38;2;57;255;20mTurfCode Multiplexer Cockpit (60fps)\x1b[0m\r\n\
-                         \x1b[38;2;74;124;74mType /help in prompt or press [Tab] to cycle focus.\x1b[0m\r\n\r\n\
-                         turfcode-cli$ \x1b[38;2;240;255;240mcargo check --workspace\x1b[0m\r\n\
+                        "\x1b[1;38;2;137;180;250mTurfCode Multiplexer Cockpit (60fps)\x1b[0m\r\n\
+                         \x1b[38;2;108;112;134mType ? in prompt or press Alt+Enter to toggle prompt focus.\x1b[0m\r\n\r\n\
+                         turfcode-cli$ \x1b[38;2;205;214;244mcargo check --workspace\x1b[0m\r\n\
                             Checking turf-tui v0.1.0\r\n\
                             Finished dev profile [unoptimized + debuginfo] in 0.04s\r\n\r\n\
                          turfcode-cli$ "

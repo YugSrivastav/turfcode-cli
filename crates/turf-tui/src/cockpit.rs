@@ -264,6 +264,37 @@ impl TerminalCockpit {
         total
     }
 
+    /// Add a tab automatically using live shell if available, or headless fallback.
+    pub fn add_tab_auto(&mut self, title: &str) -> usize {
+        let is_headless = self
+            .tabs
+            .first()
+            .and_then(|t| t.pane_manager.active_pane())
+            .is_none_or(|p| p.pty.is_none());
+
+        if is_headless {
+            self.add_tab_headless(title)
+        } else {
+            self.add_tab_shell(title).unwrap_or_else(|_| self.add_tab_headless(title))
+        }
+    }
+
+    /// Split active pane automatically using live shell if available, or headless fallback.
+    pub fn split_active_pane_auto(&mut self, direction: SplitDirection) -> usize {
+        if let Some(tab) = self.tabs.get_mut(self.active_tab_index) {
+            let is_headless = tab.pane_manager.active_pane().is_none_or(|p| p.pty.is_none());
+            if is_headless {
+                tab.pane_manager.split_active_headless(direction)
+            } else {
+                tab.pane_manager.split_active_shell(direction).unwrap_or_else(|_| {
+                    tab.pane_manager.split_active_headless(direction)
+                })
+            }
+        } else {
+            0
+        }
+    }
+
     /// Execute a built-in `/slash` command from the bottom input prompt.
     pub fn execute_command(&mut self, cmd: &str) {
         let parts: Vec<&str> = cmd.split_whitespace().collect();
@@ -276,11 +307,11 @@ impl TerminalCockpit {
                 self.should_exit = true;
             }
             "/split" | "/split-v" | "/vsplit" => {
-                let _ = self.split_active_pane(SplitDirection::Vertical);
+                self.split_active_pane_auto(SplitDirection::Vertical);
                 self.focus = FocusArea::Terminal;
             }
             "/split-h" | "/hsplit" => {
-                let _ = self.split_active_pane(SplitDirection::Horizontal);
+                self.split_active_pane_auto(SplitDirection::Horizontal);
                 self.focus = FocusArea::Terminal;
             }
             "/close" => {
@@ -289,7 +320,7 @@ impl TerminalCockpit {
             }
             "/tab" | "/new" => {
                 let title = parts.get(1).copied().unwrap_or("Shell");
-                let _ = self.add_tab_shell(title);
+                self.add_tab_auto(title);
                 self.focus = FocusArea::Terminal;
             }
             "/close-tab" => {
@@ -337,31 +368,45 @@ impl TerminalCockpit {
 
     /// Process a Crossterm keyboard event.
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
-        // --- 1. Global Multiplexer Hotkeys ---
-        if key.modifiers.contains(KeyModifiers::CONTROL) {
+        // --- 1. Exit shortcut (Ctrl+Q or Alt+Q) ---
+        if (key.modifiers.contains(KeyModifiers::CONTROL) || key.modifiers.contains(KeyModifiers::ALT))
+            && matches!(key.code, KeyCode::Char('q') | KeyCode::Char('Q'))
+        {
+            self.should_exit = true;
+            return true;
+        }
+
+        // --- 2. Alt+Enter toggles prompt focus ---
+        if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Enter {
+            self.focus = if self.focus == FocusArea::Input {
+                FocusArea::Terminal
+            } else {
+                FocusArea::Input
+            };
+            return true;
+        }
+
+        // --- 3. Non-conflicting Alt+Key Multiplexer Hotkeys ---
+        if key.modifiers.contains(KeyModifiers::ALT) {
             match key.code {
-                KeyCode::Char('q') | KeyCode::Char('Q') => {
-                    self.should_exit = true;
+                KeyCode::Char('t') | KeyCode::Char('T') => {
+                    self.add_tab_auto("Shell");
+                    return true;
+                }
+                KeyCode::Char('w') | KeyCode::Char('W') => {
+                    self.close_active_tab();
                     return true;
                 }
                 KeyCode::Char('b') | KeyCode::Char('B') => {
                     self.toggle_sidebar();
                     return true;
                 }
-                KeyCode::Char('t') | KeyCode::Char('T') => {
-                    let _ = self.add_tab_shell("Shell");
-                    return true;
-                }
-                KeyCode::Char('w') | KeyCode::Char('W') => {
-                    self.cycle_pane_focus();
+                KeyCode::Char('v') | KeyCode::Char('V') => {
+                    self.split_active_pane_auto(SplitDirection::Vertical);
                     return true;
                 }
                 KeyCode::Char('s') | KeyCode::Char('S') => {
-                    let _ = self.split_active_pane(SplitDirection::Vertical);
-                    return true;
-                }
-                KeyCode::Char('h') | KeyCode::Char('H') => {
-                    let _ = self.split_active_pane(SplitDirection::Horizontal);
+                    self.split_active_pane_auto(SplitDirection::Horizontal);
                     return true;
                 }
                 KeyCode::Char(c @ '1'..='9') => {
@@ -373,13 +418,16 @@ impl TerminalCockpit {
             }
         }
 
-        // Tab cycles focus area
-        if key.code == KeyCode::Tab && !key.modifiers.contains(KeyModifiers::CONTROL) {
+        // --- 4. Tab cycles focus ONLY when NOT in Terminal ---
+        if self.focus != FocusArea::Terminal
+            && key.code == KeyCode::Tab
+            && !key.modifiers.contains(KeyModifiers::CONTROL)
+        {
             self.cycle_focus();
             return true;
         }
 
-        // --- 2. Focus-Specific Key Handling ---
+        // --- 5. Focus-Specific Key Handling ---
         match self.focus {
             FocusArea::Terminal => {
                 // Keystrokes in terminal focus forward directly to the active PTY master

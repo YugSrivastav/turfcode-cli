@@ -1,7 +1,7 @@
 //! Full-height borderless sidebar separated from the main surface by a single vertical divider.
 //!
-//! Conforms to [MD-042] and [MD-044]: 4 typographic sections (`spaces`, `intents & tasks`,
-//! `active locks`, `peers`) separated by subtle horizontal rules (`─`).
+//! Conforms to [MD-042], [MD-044], and [MD-050]: 4 typographic sections (`spaces`, `intents & tasks`,
+//! `active locks`, `peers`) separated by subtle hairline rules (`─`) with seamless Catppuccin / Herdr styling.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -11,9 +11,9 @@ use turf_protocol::locks::FileLock;
 
 use crate::layout::SidebarSectionLayout;
 use crate::theme::{
-    Theme, COLOR_BG, COLOR_BRIGHT_GREEN, COLOR_MUTED_BORDER, COLOR_STATUS_DONE,
+    Theme, COLOR_ACTIVE_PILL, COLOR_BG, COLOR_CYAN, COLOR_MUTED_BORDER, COLOR_STATUS_DONE,
     COLOR_STATUS_LOCKED, COLOR_STATUS_PEER, COLOR_STATUS_PROGRESS, COLOR_STATUS_QUEUED,
-    COLOR_TEXT_BRIGHT, COLOR_TEXT_DIM, COLOR_TEXT_MUTED, GLYPH_DIVIDER_H, GLYPH_DIVIDER_V,
+    COLOR_TEXT_DIM, COLOR_TEXT_MUTED, COLOR_TEXT_PRIMARY, GLYPH_DIVIDER_H, GLYPH_DIVIDER_V,
 };
 
 /// Model data powering the sidebar display.
@@ -114,18 +114,48 @@ pub fn render_sidebar(
         }
     };
 
-    // --- Section 1: SPACES ---
+    // Helper to write styled spans in a single line
+    let write_spans = |x: u16, y: u16, max_w: u16, spans: &[(&str, Style)], b: &mut Buffer| {
+        if y >= b.area().height {
+            return;
+        }
+        let mut curr_x = x;
+        for &(text, style) in spans {
+            for ch in text.chars() {
+                if curr_x >= x + max_w || curr_x >= b.area().width {
+                    break;
+                }
+                let cell = &mut b[(curr_x, y)];
+                cell.set_char(ch);
+                cell.set_style(style);
+                curr_x += 1;
+            }
+        }
+        while curr_x < x + max_w && curr_x < b.area().width {
+            let cell = &mut b[(curr_x, y)];
+            cell.set_char(' ');
+            cell.set_style(Style::default());
+            cell.set_bg(COLOR_BG);
+            curr_x += 1;
+        }
+    };
+
+    // --- Section 1: spaces ---
     let s = layout.spaces_area;
     if s.height > 0 {
-        write_line(s.x + 1, s.y, s.width.saturating_sub(2), "SPACES", Theme::sidebar_header(), buf);
+        write_line(s.x + 1, s.y, s.width.saturating_sub(2), "spaces", Theme::sidebar_header(), buf);
         if s.height > 1 {
-            let space_line = format!("● {} ({})", state.current_space, state.current_branch);
-            write_line(
+            let branch_str = format!("({})", state.current_branch);
+            write_spans(
                 s.x + 1,
                 s.y + 1,
                 s.width.saturating_sub(2),
-                &space_line,
-                Style::default().fg(COLOR_BRIGHT_GREEN),
+                &[
+                    ("○ ", Style::default().fg(COLOR_TEXT_MUTED).bg(COLOR_BG)),
+                    (&state.current_space, Style::default().fg(COLOR_TEXT_PRIMARY).bg(COLOR_BG)),
+                    (" ", Style::default().fg(COLOR_TEXT_DIM).bg(COLOR_BG)),
+                    (&branch_str, Style::default().fg(COLOR_CYAN).bg(COLOR_BG)),
+                ],
                 buf,
             );
         }
@@ -135,7 +165,7 @@ pub fn render_sidebar(
                 s.y + 2,
                 s.width.saturating_sub(2),
                 "mode: host-pairing",
-                Style::default().fg(COLOR_TEXT_DIM),
+                Style::default().fg(COLOR_TEXT_DIM).bg(COLOR_BG),
                 buf,
             );
         }
@@ -143,10 +173,10 @@ pub fn render_sidebar(
 
     draw_h_div(layout.div1_area, buf);
 
-    // --- Section 2: INTENTS & TASKS ---
+    // --- Section 2: intents & tasks ---
     let t = layout.tasks_area;
     if t.height > 0 {
-        let task_header = format!("INTENTS & TASKS ({})", state.tasks.len());
+        let task_header = format!("intents & tasks ({})", state.tasks.len());
         write_line(t.x + 1, t.y, t.width.saturating_sub(2), &task_header, Theme::sidebar_header(), buf);
 
         if state.tasks.is_empty() {
@@ -155,8 +185,8 @@ pub fn render_sidebar(
                     t.x + 1,
                     t.y + 1,
                     t.width.saturating_sub(2),
-                    "No active tasks",
-                    Style::default().fg(COLOR_TEXT_DIM),
+                    "no active tasks",
+                    Style::default().fg(COLOR_TEXT_DIM).bg(COLOR_BG),
                     buf,
                 );
             }
@@ -182,9 +212,9 @@ pub fn render_sidebar(
                 let badge = format!("[{}]", task.status.display_badge());
                 let line_str = format!("{}{:<11} {}", marker, badge, task.title);
                 let item_style = if is_focused && idx == state.selected_task_index {
-                    Style::default().fg(COLOR_TEXT_BRIGHT).bg(COLOR_MUTED_BORDER)
+                    Style::default().fg(COLOR_TEXT_PRIMARY).bg(COLOR_ACTIVE_PILL)
                 } else {
-                    Style::default().fg(status_color)
+                    Style::default().fg(status_color).bg(COLOR_BG)
                 };
 
                 write_line(t.x + 1, t.y + row, t.width.saturating_sub(2), &line_str, item_style, buf);
@@ -194,10 +224,10 @@ pub fn render_sidebar(
 
     draw_h_div(layout.div2_area, buf);
 
-    // --- Section 3: ACTIVE LOCKS ---
+    // --- Section 3: active locks ---
     let l = layout.locks_area;
     if l.height > 0 {
-        let lock_header = format!("ACTIVE LOCKS ({})", state.locks.len());
+        let lock_header = format!("active locks ({})", state.locks.len());
         write_line(l.x + 1, l.y, l.width.saturating_sub(2), &lock_header, Theme::sidebar_header(), buf);
 
         if state.locks.is_empty() {
@@ -206,8 +236,8 @@ pub fn render_sidebar(
                     l.x + 1,
                     l.y + 1,
                     l.width.saturating_sub(2),
-                    "No file locks",
-                    Style::default().fg(COLOR_TEXT_DIM),
+                    "no file locks",
+                    Style::default().fg(COLOR_TEXT_DIM).bg(COLOR_BG),
                     buf,
                 );
             }
@@ -222,7 +252,7 @@ pub fn render_sidebar(
                     l.y + row,
                     l.width.saturating_sub(2),
                     &lock_line,
-                    Style::default().fg(COLOR_STATUS_LOCKED),
+                    Style::default().fg(COLOR_STATUS_LOCKED).bg(COLOR_BG),
                     buf,
                 );
             }
@@ -231,31 +261,55 @@ pub fn render_sidebar(
 
     draw_h_div(layout.div3_area, buf);
 
-    // --- Section 4: PEERS ---
+    // --- Section 4: peers ---
     let p = layout.peers_area;
     if p.height > 0 {
-        let peer_header = format!("PEERS ({})", state.peers.len());
+        let peer_header = format!("peers ({})", state.peers.len());
         write_line(p.x + 1, p.y, p.width.saturating_sub(2), &peer_header, Theme::sidebar_header(), buf);
 
         for (row, peer) in (1..).zip(state.peers.iter()) {
             if row >= p.height {
                 break;
             }
-            let dot_color = if peer.is_online {
-                COLOR_STATUS_PEER
+
+            if peer.is_self {
+                // Active user capsule pill on dark slate rounded highlight (#232838)
+                let pill_text = format!("✓ {} (you) · {}", peer.name, peer.role);
+                let max_w = p.width.saturating_sub(2);
+                let chars: Vec<char> = pill_text.chars().collect();
+                for (i, &ch) in chars.iter().take(max_w as usize).enumerate() {
+                    let px = p.x + 1 + i as u16;
+                    if px < buf.area().width {
+                        let cell = &mut buf[(px, p.y + row)];
+                        cell.set_char(ch);
+                        cell.set_style(Theme::active_peer_pill());
+                    }
+                }
+                for i in chars.len()..(max_w as usize) {
+                    let px = p.x + 1 + i as u16;
+                    if px < buf.area().width {
+                        let cell = &mut buf[(px, p.y + row)];
+                        cell.set_char(' ');
+                        cell.set_style(Style::default());
+                        cell.set_bg(COLOR_BG);
+                    }
+                }
             } else {
-                COLOR_TEXT_DIM
-            };
-            let you_suffix = if peer.is_self { " (you)" } else { "" };
-            let peer_line = format!("● {}{} • {}", peer.name, you_suffix, peer.role);
-            write_line(
-                p.x + 1,
-                p.y + row,
-                p.width.saturating_sub(2),
-                &peer_line,
-                Style::default().fg(dot_color),
-                buf,
-            );
+                let dot_color = if peer.is_online {
+                    COLOR_STATUS_PEER
+                } else {
+                    COLOR_TEXT_DIM
+                };
+                let peer_line = format!("● {} · {}", peer.name, peer.role);
+                write_line(
+                    p.x + 1,
+                    p.y + row,
+                    p.width.saturating_sub(2),
+                    &peer_line,
+                    Style::default().fg(dot_color).bg(COLOR_BG),
+                    buf,
+                );
+            }
         }
     }
 }
