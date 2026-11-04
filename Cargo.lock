@@ -1298,6 +1298,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "turf-daemon"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "turf-protocol",
+ "turf-pty",
+ "turf-vte",
+]
+
+[[package]]
 name = "turf-net"
 version = "0.1.0"
 dependencies = [
@@ -1317,6 +1332,7 @@ dependencies = [
  "tokio-tungstenite",
  "tracing",
  "turf-core",
+ "turf-daemon",
  "turf-protocol",
  "turf-tui",
  "uuid",
