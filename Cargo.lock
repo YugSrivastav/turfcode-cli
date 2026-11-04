@@ -1303,9 +1303,11 @@ version = "0.1.0"
 dependencies = [
  "aes-gcm",
  "chrono",
+ "crossterm",
  "futures-util",
  "hex",
  "rand",
+ "ratatui",
  "serde",
  "serde_json",
  "sha2",
@@ -1316,6 +1318,7 @@ dependencies = [
  "tracing",
  "turf-core",
  "turf-protocol",
+ "turf-tui",
  "uuid",
 ]
 
