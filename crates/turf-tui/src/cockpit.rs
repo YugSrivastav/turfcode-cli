@@ -532,11 +532,15 @@ impl TerminalCockpit {
         );
     }
 
-    /// Main 60fps frame blitting and event loop.
-    pub fn run_event_loop<B: Backend>(
+    /// Main 60fps frame blitting and event loop with a per-frame tick callback.
+    pub fn run_event_loop_with<B: Backend, F>(
         &mut self,
         terminal: &mut RatTerminal<B>,
-    ) -> Result<(), io::Error> {
+        mut on_tick: F,
+    ) -> Result<(), io::Error>
+    where
+        F: FnMut(&mut Self),
+    {
         // Enforce triple-lock mouse suppression directly on stdout conforming to [MD-044]
         let mut out = stdout();
         let _ = out.write_all(b"\x1b[?1006l\x1b[?1016l\x1b[?1015l\x1b[?1005l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?9l");
@@ -550,6 +554,9 @@ impl TerminalCockpit {
 
         while !self.should_exit {
             let frame_start = Instant::now();
+
+            // Run caller-supplied tick hook (e.g. state synchronization)
+            on_tick(self);
 
             // 1. Drain live PTY chunks into terminal emulators
             self.poll_ptys();
@@ -590,5 +597,13 @@ impl TerminalCockpit {
         disable_raw_mode()?;
         crossterm::execute!(stdout(), LeaveAlternateScreen)?;
         Ok(())
+    }
+
+    /// Main 60fps frame blitting and event loop.
+    pub fn run_event_loop<B: Backend>(
+        &mut self,
+        terminal: &mut RatTerminal<B>,
+    ) -> Result<(), io::Error> {
+        self.run_event_loop_with(terminal, |_| {})
     }
 }

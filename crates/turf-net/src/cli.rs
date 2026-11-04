@@ -2,11 +2,14 @@ use crate::client::TunnelClient;
 use crate::crypto;
 use crate::error::NetError;
 use crate::server::TunnelServer;
+use ratatui::backend::CrosstermBackend;
+use ratatui::Terminal;
 use std::env;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use turf_core::{intent_board::IntentBoard, lock_manager::LockManager};
+use turf_tui::{PeerInfo, TerminalCockpit};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -14,15 +17,15 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub fn print_splash() {
     println!(
         "\x1b[1;32m
-  ╔═══════════════════════════════════════════════════════════════════╗
-  ║   ████████╗██╗   ██╗██████╗ ███████╗ ██████╗ ██████╗ ██████╗    ║
-  ║   ╚══██╔══╝██║   ██║██╔══██╗██╔════╝██╔════╝██╔═══██╗██╔══██╗   ║
-  ║      ██║   ██║   ██║██████╔╝█████╗  ██║     ██║   ██║██║  ██║   ║
-  ║      ██║   ██║   ██║██╔══██╗██╔══╝  ██║     ██║   ██║██║  ██║   ║
-  ║      ██║   ╚██████╔╝██║  ██║██║     ╚██████╗╚██████╔╝██████╔╝   ║
-  ║      ╚═╝    ╚═════╝ ╚═╝  ╚═╝╚═╝      ╚═════╝ ╚═════╝ ╚═════╝    ║
-  ║                   ELECTRIC LIME COCKPIT v{}                    ║
-  ╚═══════════════════════════════════════════════════════════════════╝
+  ╔═════════════════════════════════════════════════════════════════════════╗
+  ║   ████████╗██╗   ██╗██████╗ ███████╗ ██████╗ ██████╗ ██████╗ ███████╗   ║
+  ║   ╚══██╔══╝██║   ██║██╔══██╗██╔════╝██╔════╝██╔═══██╗██╔══██╗██╔════╝   ║
+  ║      ██║   ██║   ██║██████╔╝█████╗  ██║     ██║   ██║██║  ██║█████╗     ║
+  ║      ██║   ██║   ██║██╔══██╗██╔══╝  ██║     ██║   ██║██║  ██║██╔══╝     ║
+  ║      ██║   ╚██████╔╝██║  ██║██║     ╚██████╗╚██████╔╝██████╔╝███████╗   ║
+  ║      ╚═╝    ╚═════╝ ╚═╝  ╚═╝╚═╝      ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝   ║
+  ║                      ELECTRIC LIME COCKPIT v{}                       ║
+  ╚═════════════════════════════════════════════════════════════════════════╝
 \x1b[0m",
         VERSION
     );
@@ -42,6 +45,61 @@ pub fn print_help() {
   \x1b[32mturf --version, -v\x1b[0m       Show version
 "
     );
+}
+
+/// Helper to open the system file manager directly on the target folder.
+/// Supports Windows, WSL, macOS, and Linux, gracefully ignoring errors if headless.
+pub fn open_file_manager(target_dir: &Path) {
+    if env::args().any(|a| a == "--no-cockpit") {
+        return;
+    }
+
+    let is_wsl = std::env::var_os("WSL_DISTRO_NAME").is_some()
+        || Path::new("/proc/sys/fs/binfmt_misc/WSLInterop").exists();
+
+    if cfg!(target_os = "windows") {
+        let _ = std::process::Command::new("explorer.exe")
+            .arg(target_dir)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    } else if is_wsl {
+        let win_path = std::process::Command::new("wslpath")
+            .arg("-w")
+            .arg(target_dir)
+            .output()
+            .ok()
+            .and_then(|out| {
+                if out.status.success() {
+                    String::from_utf8(out.stdout).ok().map(|s| s.trim().to_string())
+                } else {
+                    None
+                }
+            });
+        let target = win_path.unwrap_or_else(|| target_dir.to_string_lossy().to_string());
+        let _ = std::process::Command::new("explorer.exe")
+            .arg(target)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    } else if cfg!(target_os = "macos") {
+        let _ = std::process::Command::new("open")
+            .arg(target_dir)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    } else {
+        // Native Linux
+        let _ = std::process::Command::new("xdg-open")
+            .arg(target_dir)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    }
 }
 
 /// Normalize workspace folder path.
@@ -71,14 +129,121 @@ pub async fn run_host(target_dir: &Path, port: u16) -> Result<(), NetError> {
     let intent_board = Arc::new(IntentBoard::with_cwd(target_dir));
     let lock_manager = Arc::new(LockManager::with_cwd(target_dir));
 
+    let bind_port = if port == 0 { 7873 } else { port };
     let mut server = TunnelServer::new(Some(room_code.clone()))
         .with_host("127.0.0.1")
-        .with_port(port)
-        .with_intent_board(intent_board)
-        .with_lock_manager(lock_manager);
+        .with_port(bind_port)
+        .with_intent_board(Arc::clone(&intent_board))
+        .with_lock_manager(Arc::clone(&lock_manager));
 
-    let local_addr = server.start().await?;
+    let local_addr = match server.start().await {
+        Ok(addr) => addr,
+        Err(_) if port == 0 => {
+            // Fallback to dynamic port if default port 7873 is in use
+            let mut fallback = TunnelServer::new(Some(room_code.clone()))
+                .with_host("127.0.0.1")
+                .with_port(0)
+                .with_intent_board(Arc::clone(&intent_board))
+                .with_lock_manager(Arc::clone(&lock_manager));
+            let addr = fallback.start().await?;
+            server = fallback;
+            addr
+        }
+        Err(e) => return Err(e),
+    };
 
+    let username = env::var("USER")
+        .or_else(|_| env::var("USERNAME"))
+        .unwrap_or_else(|_| "Host".to_string());
+
+    let is_terminal = io::stdout().is_terminal() && !env::args().any(|arg| arg == "--no-cockpit");
+
+    if is_terminal {
+        let stdout = io::stdout();
+        let backend = CrosstermBackend::new(stdout);
+        let mut terminal = Terminal::new(backend)?;
+        let size = terminal.size()?;
+
+        let mut cockpit = TerminalCockpit::new_live(
+            &room_code,
+            "HOST",
+            &username,
+            size.height,
+            size.width,
+        )
+        .unwrap_or_else(|_| {
+            TerminalCockpit::new_headless(
+                &room_code,
+                "HOST",
+                &username,
+                size.height as usize,
+                size.width as usize,
+            )
+        });
+
+        let space_name = target_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("turfcode")
+            .to_string();
+        cockpit.sidebar_state.current_space = space_name;
+        cockpit.sidebar_state.peers = vec![PeerInfo {
+            name: username.clone(),
+            role: "HOST".to_string(),
+            is_self: true,
+            is_online: true,
+        }];
+        cockpit.sidebar_state.tasks = intent_board.get_tasks().await;
+        cockpit.sidebar_state.locks = lock_manager.get_locks().await;
+
+        let mut event_rx = server.subscribe();
+
+        cockpit
+            .run_event_loop_with(&mut terminal, |cp| {
+                while let Ok(event) = event_rx.try_recv() {
+                    match event {
+                        crate::server::ServerEvent::PeerConnected {
+                            peer_id: _,
+                            username: p_user,
+                            role,
+                        } => {
+                            if let Some(p) = cp.sidebar_state.peers.iter_mut().find(|p| p.name == p_user) {
+                                p.is_online = true;
+                                p.role = role;
+                            } else {
+                                cp.sidebar_state.peers.push(PeerInfo {
+                                    name: p_user,
+                                    role,
+                                    is_self: false,
+                                    is_online: true,
+                                });
+                            }
+                        }
+                        crate::server::ServerEvent::PeerDisconnected {
+                            peer_id: _,
+                            username: p_user,
+                        } => {
+                            if let Some(p) = cp.sidebar_state.peers.iter_mut().find(|p| p.name == p_user) {
+                                p.is_online = false;
+                            }
+                        }
+                        crate::server::ServerEvent::TasksChanged(tasks) => {
+                            cp.sidebar_state.tasks = tasks;
+                        }
+                        crate::server::ServerEvent::LocksChanged(locks) => {
+                            cp.sidebar_state.locks = locks;
+                        }
+                        _ => {}
+                    }
+                }
+            })?;
+
+        println!("\n  Shutting down TurfCode session...");
+        server.stop().await;
+        return Ok(());
+    }
+
+    // Headless / non-terminal waiting mode (for automated tests or headless environments)
     println!(
         "\n  \x1b[1;32m⚡ TURF CREATED: \x1b[1;33m{}\x1b[0m",
         room_code
@@ -127,13 +292,17 @@ pub async fn run_host(target_dir: &Path, port: u16) -> Result<(), NetError> {
 
 /// Join an active TurfCode session using a room code.
 pub async fn run_join(room_code: &str, ws_url: &str) -> Result<(), NetError> {
-    let clean_code = crypto::normalize_room_code(room_code);
-    println!(
-        "\n  \x1b[1;32m⚡ JOINING TURF: \x1b[1;33m{}\x1b[0m",
-        clean_code
-    );
-    println!("  \x1b[2m🔗 Connecting to: \x1b[36m{}\x1b[0m...", ws_url);
+    let raw_code = if room_code.trim().is_empty() {
+        print!("  \x1b[32mSession ID (e.g. TURF-XXXX): \x1b[0m");
+        io::stdout().flush().ok();
+        let mut line = String::new();
+        io::stdin().lock().read_line(&mut line).ok();
+        line.trim().to_string()
+    } else {
+        room_code.trim().to_string()
+    };
 
+    let clean_code = crypto::normalize_room_code(&raw_code);
     let username = env::var("USER")
         .or_else(|_| env::var("USERNAME"))
         .unwrap_or_else(|_| "Peer".into());
@@ -143,6 +312,118 @@ pub async fn run_join(room_code: &str, ws_url: &str) -> Result<(), NetError> {
 
     let peer_id = client.connect(ws_url).await?;
 
+    let is_terminal = io::stdout().is_terminal() && !env::args().any(|arg| arg == "--no-cockpit");
+
+    if is_terminal {
+        let stdout = io::stdout();
+        let backend = CrosstermBackend::new(stdout);
+        let mut terminal = Terminal::new(backend)?;
+        let size = terminal.size()?;
+
+        let mut cockpit = TerminalCockpit::new_live(
+            &clean_code,
+            "PEER",
+            &username,
+            size.height,
+            size.width,
+        )
+        .unwrap_or_else(|_| {
+            TerminalCockpit::new_headless(
+                &clean_code,
+                "PEER",
+                &username,
+                size.height as usize,
+                size.width as usize,
+            )
+        });
+
+        cockpit.sidebar_state.current_space = format!("turf-{clean_code}");
+        cockpit.sidebar_state.tasks = client.tasks().await;
+        cockpit.sidebar_state.locks = client.locks().await;
+
+        let initial_peers = client.peers().await;
+        cockpit.sidebar_state.peers = initial_peers
+            .into_iter()
+            .map(|p| PeerInfo {
+                name: p.username.clone(),
+                role: p.role,
+                is_self: p.username == username,
+                is_online: true,
+            })
+            .collect();
+        if !cockpit.sidebar_state.peers.iter().any(|p| p.is_self) {
+            cockpit.sidebar_state.peers.insert(
+                0,
+                PeerInfo {
+                    name: username.clone(),
+                    role: "PEER".to_string(),
+                    is_self: true,
+                    is_online: true,
+                },
+            );
+        }
+
+        cockpit
+            .run_event_loop_with(&mut terminal, |cp| {
+                while let Ok(event) = event_rx.try_recv() {
+                    match event {
+                        crate::client::ClientEvent::TasksSync(tasks) => {
+                            cp.sidebar_state.tasks = tasks;
+                        }
+                        crate::client::ClientEvent::LocksSync(locks) => {
+                            cp.sidebar_state.locks = locks;
+                        }
+                        crate::client::ClientEvent::PeersSync(peers) => {
+                            cp.sidebar_state.peers = peers
+                                .into_iter()
+                                .map(|p| PeerInfo {
+                                    name: p.username.clone(),
+                                    role: p.role,
+                                    is_self: p.username == username,
+                                    is_online: true,
+                                })
+                                .collect();
+                        }
+                        crate::client::ClientEvent::PeerJoined(p) => {
+                            if let Some(peer) = cp.sidebar_state.peers.iter_mut().find(|peer| peer.name == p.username) {
+                                peer.is_online = true;
+                                peer.role = p.role;
+                            } else {
+                                cp.sidebar_state.peers.push(PeerInfo {
+                                    name: p.username.clone(),
+                                    role: p.role,
+                                    is_self: p.username == username,
+                                    is_online: true,
+                                });
+                            }
+                        }
+                        crate::client::ClientEvent::PeerLeft {
+                            peer_id: _,
+                            username: p_name,
+                        } => {
+                            if let Some(p) = cp.sidebar_state.peers.iter_mut().find(|peer| peer.name == p_name) {
+                                p.is_online = false;
+                            }
+                        }
+                        crate::client::ClientEvent::Disconnected => {
+                            cp.should_exit = true;
+                        }
+                        _ => {}
+                    }
+                }
+            })?;
+
+        println!("\n  Leaving Turf session...");
+        client.disconnect().await;
+        return Ok(());
+    }
+
+    // Headless / non-terminal waiting mode
+    println!(
+        "\n  \x1b[1;32m⚡ JOINING TURF: \x1b[1;33m{}\x1b[0m",
+        clean_code
+    );
+    println!("  \x1b[2m🔗 Connecting to: \x1b[36m{}\x1b[0m...", ws_url);
     println!(
         "  \x1b[1;32m✔ CONNECTED SUCCESSFULLY!\x1b[0m Assigned Peer ID: \x1b[36m{}\x1b[0m\n",
         peer_id
@@ -220,31 +501,26 @@ pub async fn run_interactive_prompt() -> Result<(), NetError> {
 
     match choice {
         "1" => {
+            print!("\x1b[2J\x1b[1;1H");
+            print_splash();
             print!("  \x1b[32mEnter folder to host [default: .]: \x1b[0m");
             io::stdout().flush().ok();
             let mut dir_line = String::new();
             stdin.lock().read_line(&mut dir_line).ok();
             let target_dir = normalize_workspace_path(&dir_line);
+            open_file_manager(&target_dir);
             run_host(&target_dir, 0).await?;
         }
         "2" => {
-            print!("  \x1b[32mEnter 6-character room code (e.g. TURF-7A9B): \x1b[0m");
+            print!("\x1b[2J\x1b[1;1H");
+            print_splash();
+            print!("  \x1b[32mSession ID (e.g. TURF-XXXX): \x1b[0m");
             io::stdout().flush().ok();
             let mut code_line = String::new();
             stdin.lock().read_line(&mut code_line).ok();
             let room_code = code_line.trim();
 
-            print!("  \x1b[32mEnter host WebSocket URL [default: ws://127.0.0.1:7873]: \x1b[0m");
-            io::stdout().flush().ok();
-            let mut url_line = String::new();
-            stdin.lock().read_line(&mut url_line).ok();
-            let url = if url_line.trim().is_empty() {
-                "ws://127.0.0.1:7873"
-            } else {
-                url_line.trim()
-            };
-
-            run_join(room_code, url).await?;
+            run_join(room_code, "ws://127.0.0.1:7873").await?;
         }
         _ => {
             println!("  Exiting.");
@@ -256,7 +532,11 @@ pub async fn run_interactive_prompt() -> Result<(), NetError> {
 
 /// Main CLI entry point.
 pub async fn main_cli() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = env::args().collect();
+    let raw_args: Vec<String> = env::args().collect();
+    let args: Vec<String> = raw_args
+        .into_iter()
+        .filter(|a| a != "--no-cockpit")
+        .collect();
 
     if args.len() <= 1 {
         run_interactive_prompt().await?;
@@ -277,6 +557,7 @@ pub async fn main_cli() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 normalize_workspace_path(".")
             };
+            open_file_manager(&target);
             run_host(&target, 0).await?;
         }
         "join" => {
@@ -304,4 +585,41 @@ pub async fn main_cli() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_print_splash_banner_correctness() {
+        let splash = format!(
+            "  ╔═════════════════════════════════════════════════════════════════════════╗\n  ║   ████████╗██╗   ██╗██████╗ ███████╗ ██████╗ ██████╗ ██████╗ ███████╗   ║\n  ║   ╚══██╔══╝██║   ██║██╔══██╗██╔════╝██╔════╝██╔═══██╗██╔══██╗██╔════╝   ║\n  ║      ██║   ██║   ██║██████╔╝█████╗  ██║     ██║   ██║██║  ██║█████╗     ║\n  ║      ██║   ██║   ██║██╔══██╗██╔══╝  ██║     ██║   ██║██║  ██║██╔══╝     ║\n  ║      ██║   ╚██████╔╝██║  ██║██║     ╚██████╗╚██████╔╝██████╔╝███████╗   ║\n  ║      ╚═╝    ╚═════╝ ╚═╝  ╚═╝╚═╝      ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝   ║\n  ║                      ELECTRIC LIME COCKPIT v{}                       ║\n  ╚═════════════════════════════════════════════════════════════════════════╝",
+            VERSION
+        );
+
+        for line in splash.lines() {
+            assert_eq!(
+                line.chars().count(),
+                77,
+                "Banner line width must be exactly 77 chars: {}",
+                line
+            );
+        }
+    }
+
+    #[test]
+    fn test_normalize_workspace_path() {
+        let current = env::current_dir().unwrap();
+        assert_eq!(normalize_workspace_path(""), current);
+        assert_eq!(normalize_workspace_path("."), current);
+        assert_eq!(normalize_workspace_path("\"\""), current);
+    }
+
+    #[test]
+    fn test_open_file_manager_graceful() {
+        let temp = tempdir().unwrap();
+        open_file_manager(temp.path());
+    }
 }

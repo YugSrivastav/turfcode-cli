@@ -499,4 +499,39 @@ All crewmates, contributors, and agents MUST adhere to these invariants when mod
 - **Reason:** Native Rust networking eliminates Node.js GC stalls and connection dropped errors, provides cryptographically verified payload integrity using hardware-accelerated AES-GCM, and allows TurfCode to distribute as a single standalone binary with zero Node.js runtime dependencies.
 - **Worker Invariant:** Room code handshakes must verify room code and decrypt credentials payload before peer registration. State mutations on tasks or locks must immediately broadcast state deltas to all authenticated peers. Unambiguous room codes must strictly exclude `0`, `1`, `I`, `O`.
 
+---
+
+## [MD-049] 2026-11-04: TurfCode Interactive Launcher Cockpit Integration, Banner Typographic Fix, Clean ANSI Screen Clear, and Cross-Platform File Manager Automation
+- **Context:** The interactive TurfCode CLI launcher (`turf` / `turfcode`) required several key UX and functional enhancements:
+  1. The ASCII art splash banner in `crates/turf-net/src/cli.rs` had a missing trailing `E`, spelling `TURFCOD` instead of `TURFCODE`.
+  2. When selecting option 1 (`Create a Turf`) or option 2 (`Join a Turf`), the previous menu options remained on screen, creating visual clutter.
+  3. Creating a Turf needed to prompt for folder path, automatically open the system file manager directly on that folder, display the session ID clearly, and boot directly into the Herdr-grade `turf-tui` Ratatui Multiplexer Cockpit (`TerminalCockpit`) with a live PTY shell.
+  4. Joining a Turf needed a clean prompt asking directly for the Session ID / room code (`TURF-XXXX`) and to connect and boot directly into the live `TerminalCockpit`.
+  5. State synchronization (connected peers, intent board tasks, and file locks) needed to flow continuously into the cockpit's `SidebarState`.
+- **The Fork:** Keep the launcher as a basic text-only console loop vs. Integrate `turf-net` with `turf-tui` to directly boot the high-performance 60fps Ratatui multiplexer cockpit while preserving headless non-terminal waiting for automated CI/tests.
+- **Resolution:**
+  1. **Complete `TURFCODE` Block Banner:**
+     - Added the missing letter `E` in matching 6-row block font (`███████╗`, `██╔════╝`, `█████╗  `, `██╔══╝  `, `███████╗`, `╚══════╝`).
+     - Expanded the border width from 67 to 73 `═` characters, aligning outer box corners (`╔`, `╗`, `╚`, `╝`) and centering the subtitle `ELECTRIC LIME COCKPIT v{VERSION}` perfectly with 77 characters total line width.
+  2. **ANSI Clean Screen Clearing & Header Re-render:**
+     - Upon menu selection (`1` or `2`), emitted standard ANSI escape sequence `\x1b[2J\x1b[1;1H` and re-rendered the clean splash header so menu selection choices cleanly disappear before prompting.
+  3. **Cross-Platform Detached File Manager Opening (`open_file_manager`):**
+     - WSL detection via `/proc/sys/fs/binfmt_misc/WSLInterop` or `WSL_DISTRO_NAME` env var, converting UNIX path to Windows path via `wslpath -w` and spawning `explorer.exe <path>` detached with stdio suppressed.
+     - Native Windows: spawns `explorer.exe <path>` detached.
+     - macOS: spawns `open <path>` detached.
+     - Native Linux: spawns `xdg-open <path>` detached.
+     - Skips opening when headless or when `--no-cockpit` flag is provided; gracefully ignores exit status if no desktop GUI is available.
+  4. **Live Multiplexer Cockpit Booting (`TerminalCockpit`):**
+     - Connected `turf-net` to `turf-tui`, `ratatui 0.29`, and `crossterm 0.28`.
+     - In `run_host`: launches `TerminalCockpit::new_live(&room_code, "HOST", &username, rows, cols)` on interactive terminals, binding to default port 7873 (with dynamic port fallback).
+     - In `run_join`: cleans and normalizes user input into `TURF-XXXX` format and boots `TerminalCockpit::new_live(&clean_code, "PEER", &username, rows, cols)`.
+     - Added `TerminalCockpit::run_event_loop_with` to allow callers to drain incoming network events and synchronize state on every 60fps frame tick.
+  5. **Live Sidebar State Forwarding:**
+     - Continuously translates and forwards server/client broadcast events (`PeerConnected`, `PeerDisconnected`, `PeerJoined`, `PeerLeft`, `TasksChanged`, `LocksChanged`, `TasksSync`, `LocksSync`, `PeersSync`) into `cockpit.sidebar_state`.
+  6. **Headless & Test Preservation:**
+     - If stdout is not a terminal or if `--no-cockpit` is passed, the CLI preserves headless console logging and signal waiting for automated integration tests and server environments.
+- **Reason:** Provides an immediate, Herdr-grade multi-pane developer cockpit upon creating or joining a turf, with live interactive terminal multiplexing, auto-opened workspace directories, and real-time state synchronization.
+- **Worker Invariant:** ASCII banners must maintain uniform column width across all rows. Cockpit event loops must drain PTY chunks and network deltas at 60fps without blocking user input. Non-interactive environments must safely bypass TUI initialization.
+
+
 
