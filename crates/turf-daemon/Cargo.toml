@@ -1,0 +1,24 @@
+[package]
+name = "turf-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Persistent background daemon and IPC engine for TurfCode multiplexer"
+
+[dependencies]
+turf-protocol = { path = "../turf-protocol" }
+turf-pty = { path = "../turf-pty" }
+turf-vte = { path = "../turf-vte" }
+tokio = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = { workspace = true }
+anyhow = { workspace = true }
+
+[[bin]]
+name = "turf-daemon"
+path = "src/main.rs"
+
+[dev-dependencies]
+tempfile = "3"

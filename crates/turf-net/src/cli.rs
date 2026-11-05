@@ -41,6 +41,9 @@ pub fn print_help() {
   \x1b[32mturf\x1b[0m                     Alias for turfcode
   \x1b[32mturf host [dir]\x1b[0m          Host a shared Turf session in the given directory (default: .)
   \x1b[32mturf join <id> [url]\x1b[0m     Join an active Turf session using room code
+  \x1b[32mturf daemon start\x1b[0m        Start the persistent background daemon
+  \x1b[32mturf daemon stop\x1b[0m         Stop the running background daemon
+  \x1b[32mturf daemon status\x1b[0m       Show background daemon process and socket status
   \x1b[32mturf --help, -h\x1b[0m          Show this help information
   \x1b[32mturf --version, -v\x1b[0m       Show version
 "
@@ -530,6 +533,106 @@ pub async fn run_interactive_prompt() -> Result<(), NetError> {
     Ok(())
 }
 
+/// Handle daemon subcommands (`turf daemon start`, `turf daemon stop`, `turf daemon status`, `turf daemon run`).
+pub async fn handle_daemon_cli(subargs: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let subcmd = subargs.first().map(|s| s.as_str()).unwrap_or("status");
+    match subcmd {
+        "start" => {
+            let foreground = subargs.iter().any(|a| a == "--foreground" || a == "-f");
+            let socket_path = turf_daemon::default_socket_path();
+            if foreground {
+                println!(
+                    "Starting TurfCode daemon in foreground on {}...",
+                    socket_path.display()
+                );
+                let server = turf_daemon::TurfDaemonServer::new(socket_path);
+                server.run().await?;
+            } else if turf_daemon::probe_daemon(&socket_path).await {
+                println!(
+                    "\x1b[1;33mTurfCode daemon is already running\x1b[0m at {}",
+                    socket_path.display()
+                );
+            } else {
+                turf_daemon::ensure_daemon_running().await?;
+                println!(
+                    "\x1b[1;32m✔ TurfCode daemon started successfully\x1b[0m at {}",
+                    socket_path.display()
+                );
+            }
+        }
+        "run" => {
+            let mut socket_path = turf_daemon::default_socket_path();
+            let mut i = 0;
+            while i < subargs.len() {
+                if subargs[i] == "--socket" && i + 1 < subargs.len() {
+                    socket_path = PathBuf::from(&subargs[i + 1]);
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            let server = turf_daemon::TurfDaemonServer::new(socket_path);
+            let server_handle = server.clone();
+            tokio::spawn(async move {
+                tokio::signal::ctrl_c().await.ok();
+                server_handle.shutdown();
+            });
+            server.run().await?;
+        }
+        "stop" => {
+            let socket_path = turf_daemon::default_socket_path();
+            match turf_daemon::DaemonClient::connect(&socket_path).await {
+                Ok(client) => {
+                    client.shutdown().await?;
+                    println!("\x1b[1;32m✔ TurfCode daemon stopped successfully.\x1b[0m");
+                }
+                Err(_) => {
+                    println!(
+                        "\x1b[1;33mTurfCode daemon is not running\x1b[0m (socket at {}).",
+                        socket_path.display()
+                    );
+                }
+            }
+        }
+        "status" => {
+            let socket_path = turf_daemon::default_socket_path();
+            match turf_daemon::DaemonClient::connect(&socket_path).await {
+                Ok(client) => match client.status().await {
+                    Ok(st) => {
+                        println!("\x1b[1;32mTurfCode Daemon: RUNNING\x1b[0m");
+                        println!("  PID:             {}", st.pid);
+                        println!("  Uptime:          {}s", st.uptime_secs);
+                        println!("  Active Sessions: {}", st.active_sessions);
+                        println!("  Active Panes:    {}", st.active_panes);
+                        println!("  Socket:          {}", st.socket_path);
+                        println!("  Version:         v{}", st.version);
+                    }
+                    Err(e) => {
+                        println!(
+                            "\x1b[1;31mTurfCode Daemon: UNRESPONSIVE\x1b[0m (Error: {})",
+                            e
+                        );
+                    }
+                },
+                Err(_) => {
+                    println!(
+                        "\x1b[1;33mTurfCode Daemon: STOPPED\x1b[0m (Socket not responding at {})",
+                        socket_path.display()
+                    );
+                }
+            }
+        }
+        other => {
+            eprintln!(
+                "\x1b[31mError:\x1b[0m Unknown daemon subcommand '{}'. Valid options: start, stop, status",
+                other
+            );
+            std::process::exit(1);
+        }
+    }
+    Ok(())
+}
+
 /// Main CLI entry point.
 pub async fn main_cli() -> Result<(), Box<dyn std::error::Error>> {
     let raw_args: Vec<String> = env::args().collect();
@@ -539,6 +642,18 @@ pub async fn main_cli() -> Result<(), Box<dyn std::error::Error>> {
         .collect();
 
     if args.len() <= 1 {
+        // Auto-detect and connect to daemon, falling back cleanly to in-process mode
+        match turf_daemon::ensure_daemon_running().await {
+            Ok(sock_path) => {
+                tracing::info!("Connected to TurfCode daemon at {}", sock_path.display());
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Daemon auto-start unavailable ({}); falling back to standalone in-process mode",
+                    e
+                );
+            }
+        }
         run_interactive_prompt().await?;
         return Ok(());
     }
@@ -550,6 +665,9 @@ pub async fn main_cli() -> Result<(), Box<dyn std::error::Error>> {
         }
         "--version" | "-v" => {
             println!("turfcode v{}", VERSION);
+        }
+        "daemon" => {
+            handle_daemon_cli(&args[2..]).await?;
         }
         "host" => {
             let target = if args.len() > 2 {
@@ -621,5 +739,17 @@ mod tests {
     fn test_open_file_manager_graceful() {
         let temp = tempdir().unwrap();
         open_file_manager(temp.path());
+    }
+
+    #[tokio::test]
+    async fn test_daemon_cli_status_when_stopped() {
+        let res = handle_daemon_cli(&["status".to_string()]).await;
+        assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_daemon_cli_stop_when_stopped() {
+        let res = handle_daemon_cli(&["stop".to_string()]).await;
+        assert!(res.is_ok());
     }
 }

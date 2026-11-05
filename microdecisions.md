@@ -573,6 +573,37 @@ All crewmates, contributors, and agents MUST adhere to these invariants when mod
 - **Reason:** Restores full terminal utility (tab completion and standard shell keybindings work without multiplexer interference), provides high-end visual elegance matching Herdr, and enables native terminal transparency without jarring color blocks.
 - **Worker Invariant:** Raw `Tab` and readline `Ctrl+...` keystrokes must never be intercepted when terminal panes have focus. Multiplexer control must strictly use `Alt+...` combinations. Default cell backgrounds in VTE blitting must remain `Color::Reset`.
 
+---
+
+## [MD-051] 2026-11-04: Persistent Background Daemon Architecture, Length-Prefixed Wire Framing, and Unix Domain Socket IPC Engine
+- **Context:** To match Herdr's benchmark stability and performance, TurfCode required elevation to a true client-server multiplexer architecture:
+  1. Interactive TUI clients were previously hosting PTY subprocesses in-process. If the terminal emulator window closed, crashed, or was detached, running child processes (such as compilers, vim, bash, or servers) were killed.
+  2. Running child processes and multiplexer session states must persist in a decoupled background daemon (`turf-daemon`), surviving client disconnects.
+  3. Interactive launchers and CLI entrypoints (`turf`, `turfcode`) require automatic daemon socket discovery (`~/.turf/turf.sock` on Unix or `\\.\pipe\turf` on Windows) with automatic background daemon auto-spawning.
+  4. Standardized length-prefixed JSON wire framing and RPC command protocol (`server.status`, `session.attach`, `session.detach`, `pane.spawn`, `pane.write`, `pane.read`, `pane.resize`, `pane.split`, `pane.close`, `workspace.list`) with bidirectional real-time PTY streaming.
+- **The Fork:** In-process PTY subprocess hosting inside the TUI client vs. Persistent detached background daemon (`crates/turf-daemon`) communicating over Unix Domain Sockets / Named Pipes with length-prefixed JSON-RPC IPC (`crates/turf-protocol`).
+- **Resolution:** Option B: Persistent background daemon architecture.
+  1. **Background Daemon Architecture (`crates/turf-daemon`):**
+     - Implemented `TurfDaemonServer` managing active multiplexer sessions, tabs, screen buffers, and spawned PTY child processes.
+     - Handles incoming client socket connections asynchronously; each client receives streaming PTY output and event broadcasts via dedicated transport channels.
+     - On client disconnect, the daemon gracefully preserves all active sessions, tabs, and spawned child processes without killing them.
+  2. **Socket Listener & Connector Abstraction (`src/socket.rs`):**
+     - Implemented socket listener and connector abstraction with automatic stale socket cleanup on Unix (`UnixListener` / `UnixStream`).
+     - Standardized socket path resolution: checks `$TURF_SOCKET_PATH`, then `~/.turf/turf.sock` on Unix (`\\.\pipe\turf` on Windows).
+  3. **Length-Prefixed Wire Framing & Protocol (`crates/turf-protocol/src/ipc.rs`):**
+     - 4-byte big-endian length prefix followed by JSON payload, protecting against delimiter collision and supporting binary PTY stream chunks up to 32MB.
+     - Defined `DaemonRequest`, `DaemonResponse`, `DaemonEvent`, and `IpcMessage` wire contracts mapping to canonical RPC methods (`server.status`, `session.attach`, `pane.spawn`, etc.).
+  4. **Auto-Detection & Background Spawner (`src/autodetect.rs`):**
+     - Implemented `ensure_daemon_running()`: probes daemon socket, auto-spawns detached background daemon if unresponsive with redirected logging to `~/.turf/daemon.log`, and polls up to 2.0 seconds for socket readiness.
+  5. **Client Connection Handle (`src/client.rs`):**
+     - Implemented `DaemonClient` multiplexing RPC request/response correlations with atomic IDs and broadcast subscription for async PTY event streams.
+  6. **CLI Daemon Management (`crates/turf-net/src/cli.rs`):**
+     - Added explicit subcommands `turf daemon start`, `turf daemon stop`, `turf daemon status`, `turf daemon run`.
+     - Wired interactive entrypoints (`turf` / `turfcode`) to auto-attach via `ensure_daemon_running()` and `DaemonClient`, with clean fallback to standalone in-process mode in constrained environments.
+- **Reason:** Guarantees zero loss of in-flight compilation jobs, editors, or background servers upon terminal exit or crash, providing Herdr-level stability, resilience, and multi-session detachment.
+- **Worker Invariant:** Child processes spawned in `TurfDaemonServer` must never be killed upon client socket disconnect. IPC framing must use 4-byte big-endian length headers. Stale socket files must be safely detected and removed prior to listener binding.
+
+
 
 
 

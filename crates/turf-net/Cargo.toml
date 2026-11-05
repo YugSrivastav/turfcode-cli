@@ -10,6 +10,7 @@ description = "Tokio WebSocket P2P encrypted tunnel and state synchronization fo
 turf-protocol = { path = "../turf-protocol" }
 turf-core = { path = "../turf-core" }
 turf-tui = { path = "../turf-tui" }
+turf-daemon = { path = "../turf-daemon" }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
 tokio = { workspace = true }
