@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 use turf_protocol::ipc::{
-    DaemonEvent, DaemonRequest, DaemonResponse, DaemonStatus, IpcMessage,
+    DaemonEvent, DaemonRequest, DaemonResponse, DaemonStatus, IpcMessage, SessionInfo,
 };
 
 use crate::socket::{connect_stream, recv_ipc_message, send_ipc_message};
@@ -30,8 +30,7 @@ impl DaemonClient {
         let stream = connect_stream(&path).await?;
         let (mut read_half, mut write_half) = tokio::io::split(stream);
 
-        let (request_tx, mut request_rx) =
-            mpsc::channel::<(IpcMessage, ResponseSender)>(128);
+        let (request_tx, mut request_rx) = mpsc::channel::<(IpcMessage, ResponseSender)>(128);
         let (event_tx, _) = broadcast::channel::<DaemonEvent>(2048);
 
         let pending: PendingRequests = Arc::new(Mutex::new(HashMap::new()));
@@ -179,7 +178,10 @@ impl DaemonClient {
 
     /// Read the current terminal screen buffer text from a pane (`pane.read`).
     pub async fn read_pane(&self, pane_id: usize) -> anyhow::Result<Vec<u8>> {
-        match self.send_request(DaemonRequest::ReadPane { pane_id }).await? {
+        match self
+            .send_request(DaemonRequest::ReadPane { pane_id })
+            .await?
+        {
             DaemonResponse::PaneReadResult { data } => Ok(data),
             other => anyhow::bail!("Unexpected response to read pane: {:?}", other),
         }
@@ -226,7 +228,10 @@ impl DaemonClient {
 
     /// Close and kill a pane process (`pane.close`).
     pub async fn close_pane(&self, pane_id: usize) -> anyhow::Result<()> {
-        match self.send_request(DaemonRequest::ClosePane { pane_id }).await? {
+        match self
+            .send_request(DaemonRequest::ClosePane { pane_id })
+            .await?
+        {
             DaemonResponse::Success => Ok(()),
             other => anyhow::bail!("Unexpected response to close pane: {:?}", other),
         }
@@ -252,6 +257,80 @@ impl DaemonClient {
         {
             DaemonResponse::Success => Ok(()),
             other => anyhow::bail!("Unexpected response to detach session: {:?}", other),
+        }
+    }
+
+    /// List active multiplexer sessions (`session.list`).
+    pub async fn list_sessions(&self) -> anyhow::Result<Vec<SessionInfo>> {
+        match self.send_request(DaemonRequest::ListSessions).await? {
+            DaemonResponse::SessionsResult { sessions } => Ok(sessions),
+            other => anyhow::bail!("Unexpected response to list sessions: {:?}", other),
+        }
+    }
+
+    /// Create a new detached named session (`session.create`).
+    pub async fn create_session(&self, name: &str) -> anyhow::Result<SessionInfo> {
+        match self
+            .send_request(DaemonRequest::CreateSession {
+                name: name.to_string(),
+            })
+            .await?
+        {
+            DaemonResponse::SessionCreated { session } => Ok(session),
+            DaemonResponse::Success => Ok(SessionInfo::new(name, name, 0, 0)),
+            other => anyhow::bail!("Unexpected response to create session: {:?}", other),
+        }
+    }
+
+    /// Kill and terminate a named session and reap its child PTYs (`session.kill`).
+    pub async fn kill_session(&self, name: &str) -> anyhow::Result<()> {
+        match self
+            .send_request(DaemonRequest::KillSession {
+                name: name.to_string(),
+            })
+            .await?
+        {
+            DaemonResponse::Success => Ok(()),
+            other => anyhow::bail!("Unexpected response to kill session: {:?}", other),
+        }
+    }
+
+    /// Send text or keystrokes to a running pane PTY (`pane.send_keys`).
+    pub async fn send_pane_keys(&self, pane_id: usize, keys: &str) -> anyhow::Result<()> {
+        match self
+            .send_request(DaemonRequest::PaneSendKeys {
+                pane_id,
+                keys: keys.to_string(),
+            })
+            .await?
+        {
+            DaemonResponse::Success => Ok(()),
+            other => anyhow::bail!("Unexpected response to send pane keys: {:?}", other),
+        }
+    }
+
+    /// Read terminal text lines from a pane screen buffer (`pane.read_lines`).
+    pub async fn read_pane_lines(
+        &self,
+        pane_id: usize,
+        lines: Option<usize>,
+    ) -> anyhow::Result<Vec<String>> {
+        match self
+            .send_request(DaemonRequest::PaneReadLines { pane_id, lines })
+            .await?
+        {
+            DaemonResponse::PaneLinesResult { lines } => Ok(lines),
+            DaemonResponse::PaneReadResult { data } => {
+                let text = String::from_utf8_lossy(&data);
+                let all_lines: Vec<String> = text.lines().map(|s| s.to_string()).collect();
+                if let Some(n) = lines {
+                    let start = all_lines.len().saturating_sub(n);
+                    Ok(all_lines[start..].to_vec())
+                } else {
+                    Ok(all_lines)
+                }
+            }
+            other => anyhow::bail!("Unexpected response to read pane lines: {:?}", other),
         }
     }
 

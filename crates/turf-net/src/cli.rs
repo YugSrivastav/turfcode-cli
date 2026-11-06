@@ -37,16 +37,24 @@ pub fn print_help() {
         "\x1b[1;32mTURFCODE CLI\x1b[0m — \x1b[37mReal-time multiplayer AI coding in the terminal\x1b[0m
 
 \x1b[2mUSAGE:\x1b[0m
-  \x1b[32mturfcode\x1b[0m                 Open interactive launcher menu (Create or Join a Turf)
-  \x1b[32mturf\x1b[0m                     Alias for turfcode
-  \x1b[32mturf host [dir]\x1b[0m          Host a shared Turf session in the given directory (default: .)
-  \x1b[32mturf join <id> [url]\x1b[0m     Join an active Turf session using room code
-  \x1b[32mturf attach [id]\x1b[0m         Attach to an active background daemon session (default: default)
-  \x1b[32mturf daemon start\x1b[0m        Start the persistent background daemon
-  \x1b[32mturf daemon stop\x1b[0m         Stop the running background daemon
-  \x1b[32mturf daemon status\x1b[0m       Show background daemon process and socket status
-  \x1b[32mturf --help, -h\x1b[0m          Show this help information
-  \x1b[32mturf --version, -v\x1b[0m       Show version
+  \x1b[32mturfcode\x1b[0m                         Open interactive launcher menu (Create or Join a Turf)
+  \x1b[32mturf\x1b[0m                             Alias for turfcode
+  \x1b[32mturf host [dir]\x1b[0m                  Host a shared Turf session in the given directory (default: .)
+  \x1b[32mturf join <id> [url]\x1b[0m             Join an active Turf session using room code
+  \x1b[32mturf list\x1b[0m                        List active daemon sessions
+  \x1b[32mturf attach [name]\x1b[0m              Attach interactive TUI client to a named session (default: default)
+  \x1b[32mturf session list\x1b[0m               List active sessions and pane counts
+  \x1b[32mturf session new <name>\x1b[0m         Spawn a detached named session
+  \x1b[32mturf session attach <name>\x1b[0m      Attach interactive TUI client to a named session
+  \x1b[32mturf session kill <name>\x1b[0m        Terminate a named session and reap its child PTYs
+  \x1b[32mturf pane read <id> [--lines N]\x1b[0m Read captured screen buffer text from a pane
+  \x1b[32mturf pane send-keys <id> <text>\x1b[0m Inject keystrokes or text directly into pane PTY
+  \x1b[32mturf pane split <id> [-d h|v]\x1b[0m   Programmatically split a pane
+  \x1b[32mturf daemon start\x1b[0m                Start the persistent background daemon
+  \x1b[32mturf daemon stop\x1b[0m                 Stop the running background daemon
+  \x1b[32mturf daemon status\x1b[0m               Show background daemon process and socket status
+  \x1b[32mturf --help, -h\x1b[0m                  Show this help information
+  \x1b[32mturf --version, -v\x1b[0m               Show version
 "
     );
 }
@@ -76,7 +84,9 @@ pub fn open_file_manager(target_dir: &Path) {
             .ok()
             .and_then(|out| {
                 if out.status.success() {
-                    String::from_utf8(out.stdout).ok().map(|s| s.trim().to_string())
+                    String::from_utf8(out.stdout)
+                        .ok()
+                        .map(|s| s.trim().to_string())
                 } else {
                     None
                 }
@@ -262,45 +272,48 @@ pub async fn run_host(target_dir: &Path, port: u16) -> Result<(), NetError> {
 
         let mut event_rx = server.subscribe();
 
-        cockpit
-            .run_event_loop_with(&mut terminal, |cp| {
-                while let Ok(event) = event_rx.try_recv() {
-                    match event {
-                        crate::server::ServerEvent::PeerConnected {
-                            peer_id: _,
-                            username: p_user,
-                            role,
-                        } => {
-                            if let Some(p) = cp.sidebar_state.peers.iter_mut().find(|p| p.name == p_user) {
-                                p.is_online = true;
-                                p.role = role;
-                            } else {
-                                cp.sidebar_state.peers.push(PeerInfo {
-                                    name: p_user,
-                                    role,
-                                    is_self: false,
-                                    is_online: true,
-                                });
-                            }
+        cockpit.run_event_loop_with(&mut terminal, |cp| {
+            while let Ok(event) = event_rx.try_recv() {
+                match event {
+                    crate::server::ServerEvent::PeerConnected {
+                        peer_id: _,
+                        username: p_user,
+                        role,
+                    } => {
+                        if let Some(p) =
+                            cp.sidebar_state.peers.iter_mut().find(|p| p.name == p_user)
+                        {
+                            p.is_online = true;
+                            p.role = role;
+                        } else {
+                            cp.sidebar_state.peers.push(PeerInfo {
+                                name: p_user,
+                                role,
+                                is_self: false,
+                                is_online: true,
+                            });
                         }
-                        crate::server::ServerEvent::PeerDisconnected {
-                            peer_id: _,
-                            username: p_user,
-                        } => {
-                            if let Some(p) = cp.sidebar_state.peers.iter_mut().find(|p| p.name == p_user) {
-                                p.is_online = false;
-                            }
-                        }
-                        crate::server::ServerEvent::TasksChanged(tasks) => {
-                            cp.sidebar_state.tasks = tasks;
-                        }
-                        crate::server::ServerEvent::LocksChanged(locks) => {
-                            cp.sidebar_state.locks = locks;
-                        }
-                        _ => {}
                     }
+                    crate::server::ServerEvent::PeerDisconnected {
+                        peer_id: _,
+                        username: p_user,
+                    } => {
+                        if let Some(p) =
+                            cp.sidebar_state.peers.iter_mut().find(|p| p.name == p_user)
+                        {
+                            p.is_online = false;
+                        }
+                    }
+                    crate::server::ServerEvent::TasksChanged(tasks) => {
+                        cp.sidebar_state.tasks = tasks;
+                    }
+                    crate::server::ServerEvent::LocksChanged(locks) => {
+                        cp.sidebar_state.locks = locks;
+                    }
+                    _ => {}
                 }
-            })?;
+            }
+        })?;
 
         println!("\n  Shutting down TurfCode session...");
         server.stop().await;
@@ -419,55 +432,64 @@ pub async fn run_join(room_code: &str, ws_url: &str) -> Result<(), NetError> {
             );
         }
 
-        cockpit
-            .run_event_loop_with(&mut terminal, |cp| {
-                while let Ok(event) = event_rx.try_recv() {
-                    match event {
-                        crate::client::ClientEvent::TasksSync(tasks) => {
-                            cp.sidebar_state.tasks = tasks;
-                        }
-                        crate::client::ClientEvent::LocksSync(locks) => {
-                            cp.sidebar_state.locks = locks;
-                        }
-                        crate::client::ClientEvent::PeersSync(peers) => {
-                            cp.sidebar_state.peers = peers
-                                .into_iter()
-                                .map(|p| PeerInfo {
-                                    name: p.username.clone(),
-                                    role: p.role,
-                                    is_self: p.username == username,
-                                    is_online: true,
-                                })
-                                .collect();
-                        }
-                        crate::client::ClientEvent::PeerJoined(p) => {
-                            if let Some(peer) = cp.sidebar_state.peers.iter_mut().find(|peer| peer.name == p.username) {
-                                peer.is_online = true;
-                                peer.role = p.role;
-                            } else {
-                                cp.sidebar_state.peers.push(PeerInfo {
-                                    name: p.username.clone(),
-                                    role: p.role,
-                                    is_self: p.username == username,
-                                    is_online: true,
-                                });
-                            }
-                        }
-                        crate::client::ClientEvent::PeerLeft {
-                            peer_id: _,
-                            username: p_name,
-                        } => {
-                            if let Some(p) = cp.sidebar_state.peers.iter_mut().find(|peer| peer.name == p_name) {
-                                p.is_online = false;
-                            }
-                        }
-                        crate::client::ClientEvent::Disconnected => {
-                            cp.should_exit = true;
-                        }
-                        _ => {}
+        cockpit.run_event_loop_with(&mut terminal, |cp| {
+            while let Ok(event) = event_rx.try_recv() {
+                match event {
+                    crate::client::ClientEvent::TasksSync(tasks) => {
+                        cp.sidebar_state.tasks = tasks;
                     }
+                    crate::client::ClientEvent::LocksSync(locks) => {
+                        cp.sidebar_state.locks = locks;
+                    }
+                    crate::client::ClientEvent::PeersSync(peers) => {
+                        cp.sidebar_state.peers = peers
+                            .into_iter()
+                            .map(|p| PeerInfo {
+                                name: p.username.clone(),
+                                role: p.role,
+                                is_self: p.username == username,
+                                is_online: true,
+                            })
+                            .collect();
+                    }
+                    crate::client::ClientEvent::PeerJoined(p) => {
+                        if let Some(peer) = cp
+                            .sidebar_state
+                            .peers
+                            .iter_mut()
+                            .find(|peer| peer.name == p.username)
+                        {
+                            peer.is_online = true;
+                            peer.role = p.role;
+                        } else {
+                            cp.sidebar_state.peers.push(PeerInfo {
+                                name: p.username.clone(),
+                                role: p.role,
+                                is_self: p.username == username,
+                                is_online: true,
+                            });
+                        }
+                    }
+                    crate::client::ClientEvent::PeerLeft {
+                        peer_id: _,
+                        username: p_name,
+                    } => {
+                        if let Some(p) = cp
+                            .sidebar_state
+                            .peers
+                            .iter_mut()
+                            .find(|peer| peer.name == p_name)
+                        {
+                            p.is_online = false;
+                        }
+                    }
+                    crate::client::ClientEvent::Disconnected => {
+                        cp.should_exit = true;
+                    }
+                    _ => {}
                 }
-            })?;
+            }
+        })?;
 
         println!("\n  Leaving Turf session...");
         client.disconnect().await;
@@ -747,6 +769,221 @@ pub async fn handle_daemon_cli(subargs: &[String]) -> Result<(), Box<dyn std::er
     Ok(())
 }
 
+async fn attach_cockpit(session_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let is_terminal = io::stdout().is_terminal();
+    if is_terminal {
+        let username = env::var("USER")
+            .or_else(|_| env::var("USERNAME"))
+            .unwrap_or_else(|_| "user".to_string());
+        let stdout = io::stdout();
+        let backend = CrosstermBackend::new(stdout);
+        let mut terminal = Terminal::new(backend)?;
+        let size = terminal.size()?;
+
+        let mut cockpit =
+            TerminalCockpit::new_live(session_name, "HOST", &username, size.height, size.width)
+                .unwrap_or_else(|_| {
+                    TerminalCockpit::new_headless(
+                        session_name,
+                        "HOST",
+                        &username,
+                        size.height as usize,
+                        size.width as usize,
+                    )
+                });
+
+        cockpit.sidebar_state.current_space = format!("session-{}", session_name);
+        cockpit.sidebar_state.peers = vec![PeerInfo {
+            name: username,
+            role: "HOST".to_string(),
+            is_self: true,
+            is_online: true,
+        }];
+
+        cockpit.run_event_loop(&mut terminal)?;
+    } else {
+        println!("\x1b[1;32m✔ Attached to session '{}'\x1b[0m", session_name);
+    }
+    Ok(())
+}
+
+/// Handle multi-session CLI commands (`turf session list`, `turf session new`, `turf session attach`, `turf session kill`).
+pub async fn handle_session_cli(subargs: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let subcmd = subargs.first().map(|s| s.as_str()).unwrap_or("list");
+    match subcmd {
+        "list" => {
+            let socket_path = turf_daemon::default_socket_path();
+            if !turf_daemon::probe_daemon(&socket_path).await {
+                println!(
+                    "\x1b[1;33mTurfCode daemon is not running\x1b[0m (socket at {}).",
+                    socket_path.display()
+                );
+                return Ok(());
+            }
+            let client = turf_daemon::DaemonClient::connect(&socket_path).await?;
+            let sessions = client.list_sessions().await?;
+            if sessions.is_empty() {
+                println!("No active sessions found.");
+            } else {
+                println!("{:<16} {:<8} {:<10} CREATED", "SESSION", "PANES", "STATUS");
+                for s in sessions {
+                    let created_dt = chrono::DateTime::from_timestamp(s.created_at_unix as i64, 0)
+                        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+                        .unwrap_or_else(|| s.created_at_unix.to_string());
+                    let status_str = if s.pane_count > 0 { "active" } else { "idle" };
+                    println!(
+                        "{:<16} {:<8} {:<10} {} ({})",
+                        s.name, s.pane_count, status_str, created_dt, s.created_at_unix
+                    );
+                }
+            }
+        }
+        "new" => {
+            let name = match subargs.get(1) {
+                Some(n) if !n.trim().is_empty() => n.trim(),
+                _ => {
+                    eprintln!(
+                        "\x1b[31mError:\x1b[0m Missing session name. Usage: turf session new <name>"
+                    );
+                    std::process::exit(1);
+                }
+            };
+            let sock_path = turf_daemon::ensure_daemon_running().await?;
+            let client = turf_daemon::DaemonClient::connect(&sock_path).await?;
+            let info = client.create_session(name).await?;
+            println!(
+                "\x1b[1;32m✔ Created detached session '{}'\x1b[0m (panes: {})",
+                info.name, info.pane_count
+            );
+        }
+        "attach" => {
+            let name = match subargs.get(1) {
+                Some(n) if !n.trim().is_empty() => n.trim(),
+                _ => {
+                    eprintln!(
+                        "\x1b[31mError:\x1b[0m Missing session name. Usage: turf attach <name>"
+                    );
+                    std::process::exit(1);
+                }
+            };
+            let sock_path = turf_daemon::ensure_daemon_running().await?;
+            let client = turf_daemon::DaemonClient::connect(&sock_path).await?;
+            client.attach_session(name).await?;
+            attach_cockpit(name).await?;
+        }
+        "kill" => {
+            let name = match subargs.get(1) {
+                Some(n) if !n.trim().is_empty() => n.trim(),
+                _ => {
+                    eprintln!(
+                        "\x1b[31mError:\x1b[0m Missing session name. Usage: turf session kill <name>"
+                    );
+                    std::process::exit(1);
+                }
+            };
+            let sock_path = turf_daemon::default_socket_path();
+            let client = turf_daemon::DaemonClient::connect(&sock_path).await?;
+            client.kill_session(name).await?;
+            println!(
+                "\x1b[1;32m✔ Terminated session '{}' and reaped child PTYs.\x1b[0m",
+                name
+            );
+        }
+        other => {
+            eprintln!(
+                "\x1b[31mError:\x1b[0m Unknown session subcommand '{}'. Valid options: list, new, attach, kill",
+                other
+            );
+            std::process::exit(1);
+        }
+    }
+    Ok(())
+}
+
+/// Handle programmatic pane automation CLI commands (`turf pane read`, `turf pane send-keys`, `turf pane split`).
+pub async fn handle_pane_cli(subargs: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let subcmd = subargs.first().map(|s| s.as_str()).unwrap_or("read");
+    let sock_path = turf_daemon::default_socket_path();
+    let client = turf_daemon::DaemonClient::connect(&sock_path).await?;
+
+    match subcmd {
+        "read" => {
+            let pane_id_str = subargs
+                .get(1)
+                .ok_or("Missing pane ID. Usage: turf pane read <pane_id> [--lines N]")?;
+            let pane_id: usize = pane_id_str.parse().map_err(|_| "Invalid pane ID")?;
+            let mut lines = None;
+            let mut i = 2;
+            while i < subargs.len() {
+                let arg = &subargs[i];
+                if (arg == "--lines" || arg == "-n") && i + 1 < subargs.len() {
+                    lines = subargs[i + 1].parse::<usize>().ok();
+                    i += 2;
+                } else if let Some(stripped) = arg.strip_prefix("--lines=") {
+                    lines = stripped.parse::<usize>().ok();
+                    i += 1;
+                } else if let Some(stripped) = arg.strip_prefix("-n=") {
+                    lines = stripped.parse::<usize>().ok();
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+            }
+            let output_lines = client.read_pane_lines(pane_id, lines).await?;
+            for line in output_lines {
+                println!("{line}");
+            }
+        }
+        "send-keys" => {
+            let pane_id_str = subargs
+                .get(1)
+                .ok_or("Missing pane ID. Usage: turf pane send-keys <pane_id> <keys>")?;
+            let pane_id: usize = pane_id_str.parse().map_err(|_| "Invalid pane ID")?;
+            if subargs.len() < 3 {
+                return Err("Missing keys. Usage: turf pane send-keys <pane_id> <keys>".into());
+            }
+            let keys = subargs[2..].join(" ");
+            client.send_pane_keys(pane_id, &keys).await?;
+        }
+        "split" => {
+            let pane_id_str = subargs
+                .get(1)
+                .ok_or("Missing pane ID. Usage: turf pane split <pane_id> [--direction h|v]")?;
+            let pane_id: usize = pane_id_str.parse().map_err(|_| "Invalid pane ID")?;
+            let mut direction = "h".to_string();
+            let mut i = 2;
+            while i < subargs.len() {
+                let arg = &subargs[i];
+                if (arg == "--direction" || arg == "-d") && i + 1 < subargs.len() {
+                    direction = subargs[i + 1].clone();
+                    i += 2;
+                } else if let Some(stripped) = arg.strip_prefix("--direction=") {
+                    direction = stripped.to_string();
+                    i += 1;
+                } else if let Some(stripped) = arg.strip_prefix("-d=") {
+                    direction = stripped.to_string();
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+            }
+            let new_id = client.split_pane(pane_id, &direction).await?;
+            println!(
+                "\x1b[1;32m✔ Split pane {} ({}) -> spawned pane {}\x1b[0m",
+                pane_id, direction, new_id
+            );
+        }
+        other => {
+            eprintln!(
+                "\x1b[31mError:\x1b[0m Unknown pane subcommand '{}'. Valid options: read, send-keys, split",
+                other
+            );
+            std::process::exit(1);
+        }
+    }
+    Ok(())
+}
+
 /// Main CLI entry point.
 pub async fn main_cli() -> Result<(), Box<dyn std::error::Error>> {
     let raw_args: Vec<String> = env::args().collect();
@@ -792,9 +1029,18 @@ pub async fn main_cli() -> Result<(), Box<dyn std::error::Error>> {
         "--version" | "-v" => {
             println!("turfcode v{}", VERSION);
         }
+        "list" => {
+            handle_session_cli(&["list".to_string()]).await?;
+        }
         "attach" => {
             let session_code = args.get(2).map(|s| s.as_str()).unwrap_or("default");
             run_attach(session_code).await?;
+        }
+        "session" => {
+            handle_session_cli(&args[2..]).await?;
+        }
+        "pane" => {
+            handle_pane_cli(&args[2..]).await?;
         }
         "daemon" => {
             handle_daemon_cli(&args[2..]).await?;
@@ -890,5 +1136,11 @@ mod tests {
         assert_eq!(cockpit.role, "HOST");
         assert_eq!(cockpit.username, "tester");
         assert_eq!(cockpit.tabs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_session_cli_list_when_stopped() {
+        let res = handle_session_cli(&["list".to_string()]).await;
+        assert!(res.is_ok());
     }
 }

@@ -228,3 +228,200 @@ async fn test_daemon_status_query_and_clean_shutdown() {
         "Socket file should be removed upon clean server exit"
     );
 }
+
+#[tokio::test]
+async fn test_named_session_lifecycle_management() {
+    let dir = tempdir().expect("Failed to create tempdir");
+    let sock_path = dir.path().join("session_mgmt.sock");
+
+    let server = TurfDaemonServer::new(&sock_path);
+    let server_task = tokio::spawn({
+        let server = server.clone();
+        async move { server.run().await }
+    });
+
+    for _ in 0..50 {
+        if sock_path.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let client = DaemonClient::connect(&sock_path)
+        .await
+        .expect("Failed to connect client");
+
+    // 1. Initial list has default session
+    let sessions = client.list_sessions().await.expect("list_sessions failed");
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].name, "default");
+
+    // 2. Create detached named session "agent-alpha"
+    let created = client
+        .create_session("agent-alpha")
+        .await
+        .expect("Failed to create session");
+    assert_eq!(created.name, "agent-alpha");
+    assert_eq!(created.pane_count, 1);
+
+    // 3. Duplicate creation fails
+    let dup_err = client.create_session("agent-alpha").await;
+    assert!(dup_err.is_err(), "Duplicate session creation must fail");
+
+    // 4. Create second named session "agent-beta"
+    client
+        .create_session("agent-beta")
+        .await
+        .expect("Failed to create agent-beta");
+
+    let sessions_after_create = client.list_sessions().await.expect("list_sessions failed");
+    assert_eq!(sessions_after_create.len(), 3);
+    assert!(sessions_after_create.iter().any(|s| s.name == "default"));
+    assert!(sessions_after_create
+        .iter()
+        .any(|s| s.name == "agent-alpha"));
+    assert!(sessions_after_create.iter().any(|s| s.name == "agent-beta"));
+
+    // 5. Kill session "agent-alpha"
+    client
+        .kill_session("agent-alpha")
+        .await
+        .expect("Failed to kill session");
+
+    let sessions_after_kill = client.list_sessions().await.expect("list_sessions failed");
+    assert_eq!(sessions_after_kill.len(), 2);
+    assert!(!sessions_after_kill.iter().any(|s| s.name == "agent-alpha"));
+    assert!(sessions_after_kill.iter().any(|s| s.name == "agent-beta"));
+
+    // 6. Kill non-existent session fails
+    let kill_nonexistent = client.kill_session("ghost-session").await;
+    assert!(kill_nonexistent.is_err());
+
+    server.shutdown();
+    let _ = server_task.await;
+}
+
+#[tokio::test]
+async fn test_pane_send_keys_and_read_lines_automation() {
+    let dir = tempdir().expect("Failed to create tempdir");
+    let sock_path = dir.path().join("pane_automation.sock");
+
+    let server = TurfDaemonServer::new(&sock_path);
+    let server_task = tokio::spawn({
+        let server = server.clone();
+        async move { server.run().await }
+    });
+
+    for _ in 0..50 {
+        if sock_path.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let client = DaemonClient::connect(&sock_path)
+        .await
+        .expect("Failed to connect client");
+
+    let pane_id = client
+        .spawn_pane(1, None, None)
+        .await
+        .expect("Failed to spawn pane");
+
+    // Send keys with newline
+    client
+        .send_pane_keys(pane_id, "echo HERDR_AUTOMATION_OK\n")
+        .await
+        .expect("send_pane_keys failed");
+
+    // Poll read_pane_lines until output is present
+    let mut found = false;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while tokio::time::Instant::now() < deadline {
+        if let Ok(lines) = client.read_pane_lines(pane_id, Some(5)).await {
+            if lines.iter().any(|l| l.contains("HERDR_AUTOMATION_OK")) {
+                found = true;
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(found, "Expected HERDR_AUTOMATION_OK in pane lines output");
+
+    // Test read_pane_lines with limited lines
+    let single_line = client
+        .read_pane_lines(pane_id, Some(1))
+        .await
+        .expect("read 1 line failed");
+    assert!(single_line.len() <= 1);
+
+    // Test special key sequences like Enter
+    client
+        .send_pane_keys(pane_id, "Enter")
+        .await
+        .expect("send Enter failed");
+
+    // Test split pane
+    let new_pane_id = client
+        .split_pane(pane_id, "v")
+        .await
+        .expect("split_pane failed");
+    assert!(new_pane_id > pane_id);
+
+    client.close_pane(pane_id).await.expect("close pane 1");
+    client.close_pane(new_pane_id).await.expect("close pane 2");
+
+    server.shutdown();
+    let _ = server_task.await;
+}
+
+#[tokio::test]
+async fn test_kill_session_reaps_child_ptys() {
+    let dir = tempdir().expect("Failed to create tempdir");
+    let sock_path = dir.path().join("reap.sock");
+
+    let server = TurfDaemonServer::new(&sock_path);
+    let server_task = tokio::spawn({
+        let server = server.clone();
+        async move { server.run().await }
+    });
+
+    for _ in 0..50 {
+        if sock_path.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let client = DaemonClient::connect(&sock_path)
+        .await
+        .expect("Failed to connect client");
+
+    let st_initial = client.status().await.expect("status query failed");
+    assert_eq!(st_initial.active_panes, 0);
+
+    // Create session (spawns 1 child pane)
+    let session = client
+        .create_session("reap-target")
+        .await
+        .expect("create session failed");
+    assert_eq!(session.pane_count, 1);
+
+    let st_created = client.status().await.expect("status query failed");
+    assert_eq!(st_created.active_panes, 1);
+
+    // Kill session: must terminate child PTY and reap it from active panes
+    client
+        .kill_session("reap-target")
+        .await
+        .expect("kill session failed");
+
+    let st_killed = client.status().await.expect("status query failed");
+    assert_eq!(
+        st_killed.active_panes, 0,
+        "Killing session must reap all its child PTYs"
+    );
+
+    server.shutdown();
+    let _ = server_task.await;
+}

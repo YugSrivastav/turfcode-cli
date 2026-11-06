@@ -656,6 +656,34 @@ All crewmates, contributors, and agents MUST adhere to these invariants when mod
 - **Reason:** Provides essential terminal review capabilities for deep compilation logs and long outputs without memory exhaustion, prevents full-screen app glitches, and conforms to Herdr multiplexer responsiveness standards.
 - **Worker Invariant:** Alternate screen buffers must never push rows into scrollback history. Typing user input or pressing Esc while scrolled back must instantly snap `scroll_offset` back to 0.
 
+---
+
+## [MD-054] 2026-11-06: Named Multi-Session Lifecycle Management and Programmatic CLI Pane Automation Engine
+- **Context:** To achieve feature parity with modern terminal multiplexers and AI agent harness benchmarks (such as Herdr), TurfCode required:
+  1. Named multi-session lifecycle management in the background daemon (`crates/turf-daemon`), supporting concurrent named sessions alongside the `"default"` session.
+  2. Programmatic CLI automation commands (`turf pane read`, `turf pane send-keys`, `turf pane split`) enabling AI agents and automated scripts to read screen buffers, inject keystrokes, and manage panes non-interactively without terminal emulator GUI dependencies.
+  3. Wire-level IPC protocol additions in `crates/turf-protocol/src/ipc.rs` (`ListSessions`, `CreateSession`, `KillSession`, `PaneSendKeys`, `PaneReadLines`, and `SessionInfo`).
+  4. Ergonomic CLI entrypoints (`turf list`, `turf attach <name>`, `turf session <list|new|attach|kill>`, `turf pane <read|send-keys|split>`).
+- **The Fork:** Manual in-cockpit multiplexer navigation only vs. First-class named multi-session lifecycle management with programmatic CLI automation engine.
+- **Resolution:** Option B: First-class named multi-session lifecycle management and programmatic CLI automation engine.
+  1. **IPC Protocol Wire Additions (`crates/turf-protocol/src/ipc.rs`):**
+     - Defined `SessionInfo { id: String, name: String, pane_count: usize, created_at_unix: u64 }`.
+     - Extended `DaemonRequest` with `ListSessions`, `CreateSession { name }`, `KillSession { name }`, `PaneSendKeys { pane_id, keys }`, and `PaneReadLines { pane_id, lines }`.
+     - Extended `DaemonResponse` with `SessionsResult { sessions }`, `SessionCreated { session }`, and `PaneLinesResult { lines }`.
+  2. **Multi-Session Lifecycle Engine (`crates/turf-daemon/src/server.rs`):**
+     - Maintained `HashMap<String, SessionState>` in `TurfDaemonServer` tracking default `"default"` session plus detached named sessions.
+     - `CreateSession { name }` registers a new session and spawns an initial detached PTY child process.
+     - `KillSession { name }` terminates the named session, reaps all associated child PTYs, and removes them from the active pane pool.
+     - `ListSessions` dynamically reports active sessions, pane counts, creation Unix timestamps, and active status.
+  3. **Programmatic Pane Automation (`server.rs` & `client.rs`):**
+     - `parse_keys()` unescapes newline/escape sequences and translates shorthand keystrokes (`Enter`, `Return`, `Space`, `Tab`, `Backspace`, `Escape`, `Up`, `Down`, `Right`, `Left`, `C-c`, `C-d`, `C-z`, `Ctrl-C`, `Ctrl-D`, `Ctrl-Z`) into raw terminal bytes for `PaneSendKeys`.
+     - `PaneReadLines` queries the VTE screen buffer, trims trailing empty lines, and selects the requested line window (`--lines N`).
+     - Added helper methods on `DaemonClient`: `list_sessions()`, `create_session()`, `kill_session()`, `read_pane_lines()`, and `send_pane_keys()`.
+  4. **CLI Entrypoints (`crates/turf-net/src/cli.rs` & `turf.rs`):**
+     - Added subcommands: `turf list`, `turf attach <name>`, `turf session <list|new|attach|kill>`, and `turf pane <read|send-keys|split>`.
+- **Reason:** Enables seamless headless scripting and autonomous AI agent harnesses to drive TurfCode multiplexer sessions, inspect terminal state, and spawn detached worker sessions with zero UI overhead.
+- **Worker Invariant:** Killing a named session must reap and kill all of its associated child PTY processes. `PaneReadLines` and `PaneSendKeys` must operate via the background daemon without requiring an active TUI cockpit attachment.
+
 
 
 
