@@ -11,6 +11,31 @@ pub struct DaemonStatus {
     pub socket_path: String,
 }
 
+/// Detailed information about an active multiplexer session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionInfo {
+    pub id: String,
+    pub name: String,
+    pub pane_count: usize,
+    pub created_at_unix: u64,
+}
+
+impl SessionInfo {
+    pub fn new(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        pane_count: usize,
+        created_at_unix: u64,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            pane_count,
+            created_at_unix,
+        }
+    }
+}
+
 /// Request commands dispatched to the TurfCode background daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -21,6 +46,12 @@ pub enum DaemonRequest {
     AttachSession { id: String },
     /// Detach interactive client from a session without killing processes (`session.detach`).
     DetachSession { id: String },
+    /// Enumerate all active sessions (`session.list`).
+    ListSessions,
+    /// Create a new detached named session (`session.create`).
+    CreateSession { name: String },
+    /// Terminate a named session and reap its child PTYs (`session.kill`).
+    KillSession { name: String },
     /// Spawn a new PTY pane inside a tab (`pane.spawn`).
     SpawnPane {
         tab_id: usize,
@@ -40,12 +71,17 @@ pub enum DaemonRequest {
         rows: u16,
     },
     /// Split a pane vertically or horizontally (`pane.split`).
-    SplitPane {
-        pane_id: usize,
-        direction: String,
-    },
+    SplitPane { pane_id: usize, direction: String },
     /// Terminate and close a pane (`pane.close`).
     ClosePane { pane_id: usize },
+    /// Inject text or keystrokes directly into a pane PTY (`pane.send_keys`).
+    PaneSendKeys { pane_id: usize, keys: String },
+    /// Read captured terminal text lines from a pane screen buffer (`pane.read_lines`).
+    PaneReadLines {
+        pane_id: usize,
+        #[serde(default)]
+        lines: Option<usize>,
+    },
     /// List all known workspaces (`workspace.list`).
     ListWorkspaces,
     /// Gracefully shutdown the daemon process (`server.shutdown`).
@@ -59,12 +95,17 @@ impl DaemonRequest {
             Self::Status => "server.status",
             Self::AttachSession { .. } => "session.attach",
             Self::DetachSession { .. } => "session.detach",
+            Self::ListSessions => "session.list",
+            Self::CreateSession { .. } => "session.create",
+            Self::KillSession { .. } => "session.kill",
             Self::SpawnPane { .. } => "pane.spawn",
             Self::WritePane { .. } => "pane.write",
             Self::ReadPane { .. } => "pane.read",
             Self::ResizePane { .. } => "pane.resize",
             Self::SplitPane { .. } => "pane.split",
             Self::ClosePane { .. } => "pane.close",
+            Self::PaneSendKeys { .. } => "pane.send_keys",
+            Self::PaneReadLines { .. } => "pane.read_lines",
             Self::ListWorkspaces => "workspace.list",
             Self::Shutdown => "server.shutdown",
         }
@@ -88,11 +129,18 @@ pub enum DaemonResponse {
     /// List of workspaces.
     WorkspacesResult { workspaces: Vec<String> },
     /// Confirmation of session attachment.
+    /// Confirmation of session attachment.
     SessionAttached {
         id: String,
         #[serde(default)]
         panes: Vec<usize>,
     },
+    /// List of active sessions.
+    SessionsResult { sessions: Vec<SessionInfo> },
+    /// Confirmation of session creation.
+    SessionCreated { session: SessionInfo },
+    /// Terminal lines content from a pane read request.
+    PaneLinesResult { lines: Vec<String> },
 }
 
 impl DaemonResponse {
@@ -269,5 +317,74 @@ mod tests {
         } else {
             panic!("Unexpected decoded message variant");
         }
+    }
+
+    #[test]
+    fn test_session_ipc_roundtrip() {
+        let info = SessionInfo::new("session-1", "worker", 3, 1762440000);
+        let resp = IpcMessage::Response {
+            id: 10,
+            response: DaemonResponse::SessionsResult {
+                sessions: vec![info.clone()],
+            },
+        };
+        let encoded = encode_frame(&resp).expect("encode frame failed");
+        let (decoded, _) = decode_frame(&encoded).expect("decode failed").unwrap();
+        assert_eq!(decoded, resp);
+
+        let create_req = IpcMessage::Request {
+            id: 11,
+            request: DaemonRequest::CreateSession {
+                name: "dev-session".to_string(),
+            },
+        };
+        let encoded_create = encode_frame(&create_req).unwrap();
+        let (decoded_create, _) = decode_frame(&encoded_create).unwrap().unwrap();
+        assert_eq!(decoded_create, create_req);
+
+        let kill_req = IpcMessage::Request {
+            id: 12,
+            request: DaemonRequest::KillSession {
+                name: "dev-session".to_string(),
+            },
+        };
+        let encoded_kill = encode_frame(&kill_req).unwrap();
+        let (decoded_kill, _) = decode_frame(&encoded_kill).unwrap().unwrap();
+        assert_eq!(decoded_kill, kill_req);
+    }
+
+    #[test]
+    fn test_pane_automation_ipc_roundtrip() {
+        let send_keys = IpcMessage::Request {
+            id: 20,
+            request: DaemonRequest::PaneSendKeys {
+                pane_id: 2,
+                keys: "cargo test\n".to_string(),
+            },
+        };
+        let encoded = encode_frame(&send_keys).unwrap();
+        let (decoded, _) = decode_frame(&encoded).unwrap().unwrap();
+        assert_eq!(decoded, send_keys);
+
+        let read_lines = IpcMessage::Request {
+            id: 21,
+            request: DaemonRequest::PaneReadLines {
+                pane_id: 2,
+                lines: Some(10),
+            },
+        };
+        let encoded_read = encode_frame(&read_lines).unwrap();
+        let (decoded_read, _) = decode_frame(&encoded_read).unwrap().unwrap();
+        assert_eq!(decoded_read, read_lines);
+
+        let lines_resp = IpcMessage::Response {
+            id: 22,
+            response: DaemonResponse::PaneLinesResult {
+                lines: vec!["line 1".to_string(), "line 2".to_string()],
+            },
+        };
+        let encoded_resp = encode_frame(&lines_resp).unwrap();
+        let (decoded_resp, _) = decode_frame(&encoded_resp).unwrap().unwrap();
+        assert_eq!(decoded_resp, lines_resp);
     }
 }
