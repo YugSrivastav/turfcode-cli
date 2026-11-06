@@ -610,7 +610,35 @@ impl TerminalCockpit {
             return true;
         }
 
-        // --- 3. Non-conflicting Alt+Key Multiplexer Hotkeys ---
+        // --- 3. Viewport Scrolling Hotkeys ---
+        // Shift+PageUp, Alt+Up, or Alt+[: scroll up by 10 lines
+        // Shift+PageDown or Alt+Down: scroll down toward live stream
+        let is_scroll_up = (key.modifiers.contains(KeyModifiers::ALT) && (key.code == KeyCode::Up || key.code == KeyCode::Char('[')))
+            || (key.modifiers.contains(KeyModifiers::SHIFT) && key.code == KeyCode::PageUp)
+            || (key.code == KeyCode::PageUp && key.modifiers.is_empty());
+        let is_scroll_down = (key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Down)
+            || (key.modifiers.contains(KeyModifiers::SHIFT) && key.code == KeyCode::PageDown)
+            || (key.code == KeyCode::PageDown && key.modifiers.is_empty());
+
+        if is_scroll_up {
+            if let Some(tab) = self.tabs.get_mut(self.active_tab_index) {
+                if let Some(pane) = tab.pane_manager.active_pane_mut() {
+                    pane.terminal.scroll_up_viewport(10);
+                    return true;
+                }
+            }
+        }
+
+        if is_scroll_down {
+            if let Some(tab) = self.tabs.get_mut(self.active_tab_index) {
+                if let Some(pane) = tab.pane_manager.active_pane_mut() {
+                    pane.terminal.scroll_down_viewport(10);
+                    return true;
+                }
+            }
+        }
+
+        // --- 4. Non-conflicting Alt+Key Multiplexer Hotkeys ---
         if key.modifiers.contains(KeyModifiers::ALT) {
             match key.code {
                 KeyCode::Char('t') | KeyCode::Char('T') => {
@@ -651,13 +679,21 @@ impl TerminalCockpit {
             return true;
         }
 
-        // --- 5. Focus-Specific Key Handling ---
+        // --- 6. Focus-Specific Key Handling ---
         match self.focus {
             FocusArea::Terminal => {
                 // Keystrokes in terminal focus forward directly to the active PTY master
                 if let Some(tab) = self.tabs.get_mut(self.active_tab_index) {
                     if let Some(pane) = tab.pane_manager.active_pane_mut() {
+                        // Esc immediately snaps scroll_offset back to 0 if scrolled up
+                        if key.code == KeyCode::Esc && pane.terminal.scroll_offset() > 0 {
+                            pane.terminal.reset_viewport_scroll();
+                            return true;
+                        }
+
                         if let Some(bytes) = key_to_bytes(&key) {
+                            // On typing user input, immediately snap scroll_offset back to live view
+                            pane.terminal.reset_viewport_scroll();
                             pane.write_pty(&bytes);
                             return true;
                         }
@@ -770,9 +806,21 @@ impl TerminalCockpit {
         let tab_items: Vec<TabItem> = self
             .tabs
             .iter()
-            .map(|t| TabItem {
-                id: t.id,
-                title: t.title.clone(),
+            .map(|t| {
+                let badge = if let Some(pane) = t.pane_manager.active_pane() {
+                    let offset = pane.terminal.scroll_offset();
+                    if offset > 0 {
+                        format!(" [+{} lines]", offset)
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                };
+                TabItem {
+                    id: t.id,
+                    title: format!("{}{}", t.title, badge),
+                }
             })
             .collect();
 

@@ -399,6 +399,11 @@ impl Pane {
         }
     }
 
+    /// Return the active viewport scroll offset for this pane.
+    pub fn scroll_offset(&self) -> usize {
+        self.terminal.scroll_offset()
+    }
+
     /// Render borderless terminal output directly into Ratatui buffer.
     pub fn render(&mut self, area: Rect, is_focused: bool, buf: &mut Buffer) {
         self.resize(area);
@@ -417,6 +422,23 @@ impl Pane {
             cursor,
             is_focused,
         );
+
+        // Display subtle dimmed scrollback badge if scrolled up
+        let offset = self.terminal.scroll_offset();
+        if offset > 0 {
+            let badge = format!("[+{} lines]", offset);
+            let badge_len = badge.len() as u16;
+            if area.width >= badge_len + 2 && area.height >= 1 {
+                let badge_x = area.x + area.width - badge_len - 1;
+                let badge_y = area.y;
+                let style = Theme::scrollback_badge();
+                for (i, ch) in badge.chars().enumerate() {
+                    let cell = &mut buf[(badge_x + i as u16, badge_y)];
+                    cell.set_char(ch);
+                    cell.set_style(style);
+                }
+            }
+        }
     }
 }
 

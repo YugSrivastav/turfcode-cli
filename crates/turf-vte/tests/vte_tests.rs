@@ -221,3 +221,168 @@ fn test_cursor_visibility_and_title() {
     term.process_str("\x1b]2;Herdr Multiplexer\x1b\\");
     assert_eq!(term.title(), "Herdr Multiplexer");
 }
+
+#[test]
+fn test_scrollback_push_pop_and_capacity_limit() {
+    use turf_vte::ScreenBuffer;
+
+    let mut buf = ScreenBuffer::with_scrollback(3, 10, 5);
+    assert_eq!(buf.max_scrollback(), 5);
+    assert_eq!(buf.scrollback_len(), 0);
+
+    // Populate rows 0, 1, 2
+    for y in 0..3 {
+        for (x, ch) in format!("ROW{y}").chars().enumerate() {
+            buf.set_cell(x, y, turf_vte::Cell::new(ch, Color::Default, Color::Default, turf_vte::CellFlags::default()));
+        }
+    }
+
+    assert_eq!(buf.row_text_trimmed(0), "ROW0");
+    assert_eq!(buf.row_text_trimmed(1), "ROW1");
+    assert_eq!(buf.row_text_trimmed(2), "ROW2");
+
+    // Scroll up by 1 line -> ROW0 is pushed into scrollback
+    buf.scroll_up(1);
+    assert_eq!(buf.scrollback_len(), 1);
+    let hist0: String = buf.scrollback()[0].iter().map(|c| c.c).collect();
+    assert_eq!(hist0.trim_end(), "ROW0");
+    assert_eq!(buf.row_text_trimmed(0), "ROW1");
+
+    // Scroll up 6 more times -> pushes rows and hits capacity limit of 5
+    for i in 3..9 {
+        buf.set_cell(0, 2, turf_vte::Cell::new(char::from_digit(i, 10).unwrap(), Color::Default, Color::Default, turf_vte::CellFlags::default()));
+        buf.scroll_up(1);
+    }
+
+    // Scrollback must be bounded at capacity 5
+    assert_eq!(buf.scrollback_len(), 5);
+}
+
+#[test]
+fn test_scrollback_viewport_slicing() {
+    use turf_vte::ScreenBuffer;
+
+    let mut buf = ScreenBuffer::with_scrollback(3, 10, 100);
+
+    // Write Line 0, Line 1, Line 2
+    for y in 0..3 {
+        for (x, ch) in format!("LINE{y}").chars().enumerate() {
+            buf.set_cell(x, y, turf_vte::Cell::new(ch, Color::Default, Color::Default, turf_vte::CellFlags::default()));
+        }
+    }
+
+    // Scroll up 2 times: evicted rows will be LINE0 and LINE1
+    buf.scroll_up(1);
+    for (x, ch) in "LINE3".chars().enumerate() {
+        buf.set_cell(x, 2, turf_vte::Cell::new(ch, Color::Default, Color::Default, turf_vte::CellFlags::default()));
+    }
+    buf.scroll_up(1);
+    for (x, ch) in "LINE4".chars().enumerate() {
+        buf.set_cell(x, 2, turf_vte::Cell::new(ch, Color::Default, Color::Default, turf_vte::CellFlags::default()));
+    }
+
+    // Scrollback has 2 rows: LINE0 (index 0) and LINE1 (index 1)
+    // Live cells has: LINE2 (row 0), LINE3 (row 1), LINE4 (row 2)
+    assert_eq!(buf.scrollback_len(), 2);
+    assert_eq!(buf.row_text_trimmed(0), "LINE2");
+    assert_eq!(buf.row_text_trimmed(1), "LINE3");
+    assert_eq!(buf.row_text_trimmed(2), "LINE4");
+
+    // Offset 0: Live view
+    let v0 = buf.render_viewport_rows(0, 3);
+    assert_eq!(v0.len(), 3);
+    let row0_text: String = v0[0].iter().map(|c| c.c).collect();
+    let row1_text: String = v0[1].iter().map(|c| c.c).collect();
+    let row2_text: String = v0[2].iter().map(|c| c.c).collect();
+    assert_eq!(row0_text.trim_end(), "LINE2");
+    assert_eq!(row1_text.trim_end(), "LINE3");
+    assert_eq!(row2_text.trim_end(), "LINE4");
+
+    // Offset 1: Scrolled back 1 row into history (should see LINE1, LINE2, LINE3)
+    let v1 = buf.render_viewport_rows(1, 3);
+    let r0: String = v1[0].iter().map(|c| c.c).collect();
+    let r1: String = v1[1].iter().map(|c| c.c).collect();
+    let r2: String = v1[2].iter().map(|c| c.c).collect();
+    assert_eq!(r0.trim_end(), "LINE1");
+    assert_eq!(r1.trim_end(), "LINE2");
+    assert_eq!(r2.trim_end(), "LINE3");
+
+    // Offset 2: Scrolled back 2 rows into history (should see LINE0, LINE1, LINE2)
+    let v2 = buf.render_viewport_rows(2, 3);
+    let r0: String = v2[0].iter().map(|c| c.c).collect();
+    let r1: String = v2[1].iter().map(|c| c.c).collect();
+    let r2: String = v2[2].iter().map(|c| c.c).collect();
+    assert_eq!(r0.trim_end(), "LINE0");
+    assert_eq!(r1.trim_end(), "LINE1");
+    assert_eq!(r2.trim_end(), "LINE2");
+
+    // Offset 999 (exceeds scrollback_len): Clamps to 2, identical to offset 2
+    let v_clamped = buf.render_viewport_rows(999, 3);
+    let c0: String = v_clamped[0].iter().map(|c| c.c).collect();
+    assert_eq!(c0.trim_end(), "LINE0");
+}
+
+#[test]
+fn test_viewport_scroll_navigation_methods() {
+    let mut term = Terminal::new(3, 10);
+    // Write 10 lines to accumulate 7 historical lines in scrollback
+    for i in 0..10 {
+        term.process_str(&format!("Line {i}\r\n"));
+    }
+
+    assert_eq!(term.scrollback_len(), 8);
+    assert_eq!(term.scroll_offset(), 0);
+
+    // Scroll up by 3 lines
+    term.scroll_up_viewport(3);
+    assert_eq!(term.scroll_offset(), 3);
+
+    // Scroll up by 4 more lines
+    term.scroll_up_viewport(4);
+    assert_eq!(term.scroll_offset(), 7);
+
+    // Scroll up past max capacity -> clamped to scrollback_len (8)
+    term.scroll_up_viewport(50);
+    assert_eq!(term.scroll_offset(), 8);
+
+    // Scroll down by 2 lines
+    term.scroll_down_viewport(2);
+    assert_eq!(term.scroll_offset(), 6);
+
+    // Reset viewport scroll back to live bottom view
+    term.reset_viewport_scroll();
+    assert_eq!(term.scroll_offset(), 0);
+}
+
+#[test]
+fn test_alternate_screen_buffer_bypasses_scrollback_history() {
+    let mut term = Terminal::new(4, 20);
+
+    // Stream lines into primary buffer to build scrollback
+    term.process_str("P1\r\nP2\r\nP3\r\nP4\r\nP5\r\n");
+    let primary_scrollback_before = term.scrollback_len();
+    assert!(primary_scrollback_before > 0);
+
+    // Enter alternate screen buffer (Vim/Nano mode: ?1049h)
+    term.process_str("\x1b[?1049h");
+    assert!(term.is_alt_buffer());
+    assert_eq!(term.scrollback_len(), 0);
+    assert_eq!(term.scroll_offset(), 0);
+
+    // Cause heavy scrolling inside the alternate screen buffer
+    for i in 0..20 {
+        term.process_str(&format!("VIM_ROW_{i}\r\n"));
+    }
+
+    // Alternate screen buffer must NOT accumulate historical scrollback lines
+    assert_eq!(term.alt_buffer().scrollback_len(), 0);
+    assert_eq!(term.scrollback_len(), 0);
+
+    // Leave alternate screen buffer (?1049l)
+    term.process_str("\x1b[?1049l");
+    assert!(!term.is_alt_buffer());
+
+    // Primary buffer scrollback must be completely intact and preserved!
+    assert_eq!(term.scrollback_len(), primary_scrollback_before);
+}
+

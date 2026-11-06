@@ -635,6 +635,27 @@ All crewmates, contributors, and agents MUST adhere to these invariants when mod
 - **Reason:** Achieves true separation of user interface presentation from process execution. Child processes survive terminal emulator closures and client detaches, matching Herdr-grade reliability and seamless multiplexer re-attachment.
 - **Worker Invariant:** TerminalCockpit in daemon mode must never kill child PTY processes upon exit or `Alt+D` detach. Keystrokes in terminal focus must forward through IPC non-blockingly to maintain 60fps frame rate. Standalone in-process mode must always remain available as a fallback when socket IPC is unavailable.
 
+---
+
+## [MD-053] 2026-11-06: 10,000-Line Historical Scrollback Ring Buffer and Decoupled Viewport Scrolling Engine
+- **Context:** Terminal panes previously maintained only visible 2D character grids. When stdout text exceeded pane height, evicted rows were permanently lost, preventing users from reviewing build outputs, stack traces, compiler logs, or previous command history. Additionally, full-screen interactive applications (such as vim, nano, htop) utilizing the DEC private alternate screen buffer (`?1049h`) must maintain independent grid state and bypass scrollback history eviction so terminal apps remain glitch-free.
+- **The Fork:** Unbounded memory vector vs. bounded 10,000-line `VecDeque<Vec<Cell>>` ring buffer with seamless viewport slicing, hotkey navigation, and live view snap-back.
+- **Resolution:** Option B: Bounded 10,000-line scrollback ring buffer and decoupled viewport engine.
+  1. **Scrollback Ring Buffer (`crates/turf-vte`):**
+     - In `crates/turf-vte/src/screen.rs` (`ScreenBuffer`), added `scrollback: VecDeque<Vec<Cell>>` bounded by `max_scrollback: usize` (default 10,000 lines).
+     - When `scroll_up()` is invoked in the primary buffer, evicted top rows are pushed into `scrollback`. When capacity is reached, the oldest lines are popped from the front.
+     - Alternate screen buffer (`Terminal::alt_buffer`) sets `allow_scrollback = false` and `max_scrollback = 0`, bypassing history eviction to keep full-screen apps glitch-free and primary scrollback intact.
+     - Implemented `render_viewport_rows(offset: usize, count: usize) -> Vec<Vec<Cell>>` seamlessly slicing historical lines combined with live grid rows.
+     - Added `scroll_up_viewport(n)`, `scroll_down_viewport(n)`, `reset_viewport_scroll()`, and `scroll_offset() -> usize`.
+  2. **Viewport Navigation & Scrollback Mode (`crates/turf-tui`):**
+     - In `cockpit.rs`, wired `Alt+Up`, `Alt+Down`, `Shift+PageUp`, `Shift+PageDown`, and `Alt+[` to adjust the viewport scroll offset on the focused pane by 10 lines.
+     - On `Esc` or any raw character keypress, `scroll_offset` immediately snaps back to 0 (live view) before forwarding keystrokes to the PTY.
+     - When scrolled back (`scroll_offset > 0`), rendered a subtle dimmed badge (`[+{} lines]`) in the pane header area and in the tab strip title.
+  3. **Blitting Historical Lines (`crates/turf-tui/src/vte_blit.rs`):**
+     - Updated `blit_screen_buffer` to blit rows from `screen.render_viewport_rows(screen.scroll_offset(), rows)` directly into Ratatui cells, maintaining `Color::Reset` transparency, truecolor attributes, and hiding the cursor while reviewing history.
+- **Reason:** Provides essential terminal review capabilities for deep compilation logs and long outputs without memory exhaustion, prevents full-screen app glitches, and conforms to Herdr multiplexer responsiveness standards.
+- **Worker Invariant:** Alternate screen buffers must never push rows into scrollback history. Typing user input or pressing Esc while scrolled back must instantly snap `scroll_offset` back to 0.
+
 
 
 

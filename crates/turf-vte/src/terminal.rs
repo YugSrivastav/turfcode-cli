@@ -26,9 +26,13 @@ impl Terminal {
     pub fn new(rows: usize, cols: usize) -> Self {
         let rows = rows.max(1);
         let cols = cols.max(1);
+        let primary_buffer = ScreenBuffer::new(rows, cols);
+        let mut alt_buffer = ScreenBuffer::new(rows, cols);
+        alt_buffer.set_allow_scrollback(false);
+        alt_buffer.set_max_scrollback(0);
         Self {
-            primary_buffer: ScreenBuffer::new(rows, cols),
-            alt_buffer: ScreenBuffer::new(rows, cols),
+            primary_buffer,
+            alt_buffer,
             active_is_alt: false,
             primary_cursor: Cursor::default(),
             alt_cursor: Cursor::default(),
@@ -103,9 +107,58 @@ impl Terminal {
         &self.primary_buffer
     }
 
+    /// Mutable reference to the primary screen buffer.
+    pub fn primary_buffer_mut(&mut self) -> &mut ScreenBuffer {
+        &mut self.primary_buffer
+    }
+
     /// Reference to the alternate screen buffer.
     pub fn alt_buffer(&self) -> &ScreenBuffer {
         &self.alt_buffer
+    }
+
+    /// Mutable reference to the alternate screen buffer.
+    pub fn alt_buffer_mut(&mut self) -> &mut ScreenBuffer {
+        &mut self.alt_buffer
+    }
+
+    /// Scroll viewport up by `n` lines into history (primary buffer only).
+    pub fn scroll_up_viewport(&mut self, n: usize) {
+        if !self.active_is_alt {
+            self.primary_buffer.scroll_up_viewport(n);
+        }
+    }
+
+    /// Scroll viewport down by `n` lines toward the live stream.
+    pub fn scroll_down_viewport(&mut self, n: usize) {
+        if !self.active_is_alt {
+            self.primary_buffer.scroll_down_viewport(n);
+        }
+    }
+
+    /// Reset viewport scroll back to the live bottom view.
+    pub fn reset_viewport_scroll(&mut self) {
+        if !self.active_is_alt {
+            self.primary_buffer.reset_viewport_scroll();
+        }
+    }
+
+    /// Current viewport scroll offset (0 = live bottom view).
+    pub fn scroll_offset(&self) -> usize {
+        if self.active_is_alt {
+            0
+        } else {
+            self.primary_buffer.scroll_offset()
+        }
+    }
+
+    /// Current count of historical lines in scrollback history.
+    pub fn scrollback_len(&self) -> usize {
+        if self.active_is_alt {
+            0
+        } else {
+            self.primary_buffer.scrollback_len()
+        }
     }
 
     /// Current active cursor position and visibility.
@@ -210,7 +263,11 @@ impl Terminal {
     pub fn reset_terminal(&mut self) {
         self.active_is_alt = false;
         self.primary_buffer.clear();
+        self.primary_buffer.clear_scrollback();
+        self.primary_buffer.reset_viewport_scroll();
         self.alt_buffer.clear();
+        self.alt_buffer.clear_scrollback();
+        self.alt_buffer.reset_viewport_scroll();
         self.primary_cursor = Cursor::default();
         self.alt_cursor = Cursor::default();
         self.saved_cursor = None;

@@ -88,13 +88,15 @@ pub fn blit_screen_buffer(
 
     let rows = (area.height as usize).min(screen.rows());
     let cols = (area.width as usize).min(screen.cols());
+    let viewport = screen.render_viewport_rows(screen.scroll_offset(), rows);
+    let is_scrolled_back = screen.scroll_offset() > 0;
 
-    for y in 0..rows {
+    for (y, row) in viewport.iter().take(rows).enumerate() {
         let dest_y = area.y + y as u16;
         for x in 0..cols {
             let dest_x = area.x + x as u16;
 
-            let cell: &Cell = match screen.cell(x, y) {
+            let cell: &Cell = match row.get(x) {
                 Some(c) => c,
                 None => continue,
             };
@@ -111,7 +113,7 @@ pub fn blit_screen_buffer(
 
             // Render clean cursor using reverse video without neon green artifacts
             if let Some((cx, cy)) = cursor {
-                if cx == x && cy == y && is_focused {
+                if !is_scrolled_back && cx == x && cy == y && is_focused {
                     modifier |= Modifier::REVERSED;
                     if c == ' ' && (fg == RatColor::Reset || fg == bg) {
                         fg = COLOR_TEXT_PRIMARY;

@@ -347,3 +347,121 @@ fn test_keyboard_events_and_commands() {
     cockpit.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::ALT));
     assert!(cockpit.should_exit);
 }
+
+#[test]
+fn test_cockpit_viewport_scrolling_hotkeys_and_badge() {
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    let mut cockpit = TerminalCockpit::new_headless("TURF-TEST", "HOST", "tester", 20, 80);
+
+    // Populate active pane with 50 lines so scrollback accumulates
+    {
+        let tab = &mut cockpit.tabs[cockpit.active_tab_index];
+        let pane = tab.pane_manager.active_pane_mut().unwrap();
+        for i in 0..50 {
+            pane.terminal.process_str(&format!("Line {i}\r\n"));
+        }
+        assert!(pane.terminal.scrollback_len() >= 30);
+        assert_eq!(pane.terminal.scroll_offset(), 0);
+    }
+
+    // 1. Alt+Up scrolls up by 10 lines
+    cockpit.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+    {
+        let tab = &cockpit.tabs[cockpit.active_tab_index];
+        let pane = tab.pane_manager.active_pane().unwrap();
+        assert_eq!(pane.terminal.scroll_offset(), 10);
+    }
+
+    // 2. Alt+[ scrolls up by 10 lines
+    cockpit.handle_key(KeyEvent::new(KeyCode::Char('['), KeyModifiers::ALT));
+    {
+        let tab = &cockpit.tabs[cockpit.active_tab_index];
+        let pane = tab.pane_manager.active_pane().unwrap();
+        assert_eq!(pane.terminal.scroll_offset(), 20);
+    }
+
+    // 3. Shift+PageUp scrolls up by 10 lines
+    cockpit.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::SHIFT));
+    {
+        let tab = &cockpit.tabs[cockpit.active_tab_index];
+        let pane = tab.pane_manager.active_pane().unwrap();
+        assert_eq!(pane.terminal.scroll_offset(), 30);
+    }
+
+    // 4. Render cockpit and verify dimmed badge in tab strip and pane area
+    terminal
+        .draw(|f| {
+            cockpit.render(f.area(), f.buffer_mut());
+        })
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+
+    // Verify row 0 (tab strip) contains the badge [+30 lines]
+    let mut row0_text = String::new();
+    for x in 0..100 {
+        row0_text.push_str(buffer.cell((x, 0)).unwrap().symbol());
+    }
+    assert!(
+        row0_text.contains("[+30 lines]"),
+        "Tab strip must contain [+30 lines], found: {}",
+        row0_text
+    );
+
+    // Verify pane area also contains [+30 lines]
+    let mut pane_text = String::new();
+    for y in 1..28 {
+        for x in 23..100 {
+            pane_text.push_str(buffer.cell((x, y)).unwrap().symbol());
+        }
+        pane_text.push('\n');
+    }
+    assert!(
+        pane_text.contains("[+30 lines]"),
+        "Pane area must contain [+30 lines], found: {}",
+        pane_text
+    );
+
+    // 5. Alt+Down scrolls down by 10 lines
+    cockpit.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT));
+    {
+        let tab = &cockpit.tabs[cockpit.active_tab_index];
+        let pane = tab.pane_manager.active_pane().unwrap();
+        assert_eq!(pane.terminal.scroll_offset(), 20);
+    }
+
+    // 6. Shift+PageDown scrolls down by 10 lines
+    cockpit.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::SHIFT));
+    {
+        let tab = &cockpit.tabs[cockpit.active_tab_index];
+        let pane = tab.pane_manager.active_pane().unwrap();
+        assert_eq!(pane.terminal.scroll_offset(), 10);
+    }
+
+    // 7. Esc snaps scroll_offset back to 0
+    cockpit.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    {
+        let tab = &cockpit.tabs[cockpit.active_tab_index];
+        let pane = tab.pane_manager.active_pane().unwrap();
+        assert_eq!(pane.terminal.scroll_offset(), 0);
+    }
+
+    // 8. Scroll up again and type raw user input -> snaps scroll_offset back to 0
+    cockpit.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+    {
+        let tab = &cockpit.tabs[cockpit.active_tab_index];
+        let pane = tab.pane_manager.active_pane().unwrap();
+        assert_eq!(pane.terminal.scroll_offset(), 10);
+    }
+
+    // Type a character 'a' in Terminal focus
+    cockpit.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+    {
+        let tab = &cockpit.tabs[cockpit.active_tab_index];
+        let pane = tab.pane_manager.active_pane().unwrap();
+        assert_eq!(pane.terminal.scroll_offset(), 0);
+    }
+}
+
