@@ -154,4 +154,9 @@ impl Theme {
     pub fn shortcut_desc() -> Style {
         Style::default().fg(COLOR_TEXT_DIM).bg(COLOR_BG)
     }
+
+    /// Subtle dimmed scrollback indicator badge (e.g. `[+120 lines]`).
+    pub fn scrollback_badge() -> Style {
+        Style::default().fg(COLOR_TEXT_DIM).bg(COLOR_ACTIVE_PILL)
+    }
 }
