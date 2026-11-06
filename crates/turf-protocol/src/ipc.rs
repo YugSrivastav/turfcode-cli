@@ -88,7 +88,11 @@ pub enum DaemonResponse {
     /// List of workspaces.
     WorkspacesResult { workspaces: Vec<String> },
     /// Confirmation of session attachment.
-    SessionAttached { id: String },
+    SessionAttached {
+        id: String,
+        #[serde(default)]
+        panes: Vec<usize>,
+    },
 }
 
 impl DaemonResponse {
@@ -241,5 +245,29 @@ mod tests {
         let encoded = encode_frame(&msg).unwrap();
         assert_eq!(decode_frame(&encoded[..3]).unwrap(), None);
         assert_eq!(decode_frame(&encoded[..encoded.len() - 1]).unwrap(), None);
+    }
+
+    #[test]
+    fn test_session_attached_response_with_panes_roundtrip() {
+        let resp = IpcMessage::Response {
+            id: 2,
+            response: DaemonResponse::SessionAttached {
+                id: "TURF-1234".to_string(),
+                panes: vec![1, 2, 3],
+            },
+        };
+        let encoded = encode_frame(&resp).unwrap();
+        let (decoded, _) = decode_frame(&encoded).unwrap().unwrap();
+        assert_eq!(decoded, resp);
+
+        // Verify backward-compatibility: missing "panes" field decodes to empty vec
+        let json_without_panes = r#"{"kind":"Response","id":3,"response":{"type":"SessionAttached","id":"TURF-5678"}}"#;
+        let decoded_msg: IpcMessage = serde_json::from_str(json_without_panes).unwrap();
+        if let IpcMessage::Response { response: DaemonResponse::SessionAttached { id, panes }, .. } = decoded_msg {
+            assert_eq!(id, "TURF-5678");
+            assert!(panes.is_empty());
+        } else {
+            panic!("Unexpected decoded message variant");
+        }
     }
 }

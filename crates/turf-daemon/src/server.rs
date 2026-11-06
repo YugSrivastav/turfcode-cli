@@ -19,6 +19,7 @@ pub struct DaemonSession {
     pub id: String,
     pub created_at: Instant,
     pub tab_ids: Vec<usize>,
+    pub pane_ids: Vec<usize>,
 }
 
 /// A running PTY terminal pane managed by the daemon.
@@ -66,6 +67,7 @@ impl TurfDaemonServer {
                 id: "default".to_string(),
                 created_at: Instant::now(),
                 tab_ids: vec![1],
+                pane_ids: Vec::new(),
             },
         );
 
@@ -223,12 +225,24 @@ impl TurfDaemonServer {
             }
             DaemonRequest::AttachSession { id } => {
                 let mut sessions = self.state.sessions.lock().await;
-                sessions.entry(id.clone()).or_insert_with(|| DaemonSession {
+                let session = sessions.entry(id.clone()).or_insert_with(|| DaemonSession {
                     id: id.clone(),
                     created_at: Instant::now(),
                     tab_ids: vec![1],
+                    pane_ids: Vec::new(),
                 });
-                DaemonResponse::SessionAttached { id }
+                let panes = self.state.panes.lock().await;
+                session.pane_ids.retain(|pid| panes.contains_key(pid));
+                if session.pane_ids.is_empty() && !panes.is_empty() {
+                    let mut all_pids: Vec<usize> = panes.keys().copied().collect();
+                    all_pids.sort_unstable();
+                    session.pane_ids = all_pids;
+                }
+                let active_panes = session.pane_ids.clone();
+                DaemonResponse::SessionAttached {
+                    id,
+                    panes: active_panes,
+                }
             }
             DaemonRequest::DetachSession { id: _ } => DaemonResponse::Success,
             DaemonRequest::SpawnPane {
@@ -236,7 +250,15 @@ impl TurfDaemonServer {
                 cwd,
                 command,
             } => match self.spawn_pane_internal(tab_id, cwd, command).await {
-                Ok(pane_id) => DaemonResponse::PaneSpawned { pane_id },
+                Ok(pane_id) => {
+                    let mut sessions = self.state.sessions.lock().await;
+                    if let Some(session) = sessions.values_mut().last() {
+                        if !session.pane_ids.contains(&pane_id) {
+                            session.pane_ids.push(pane_id);
+                        }
+                    }
+                    DaemonResponse::PaneSpawned { pane_id }
+                }
                 Err(e) => DaemonResponse::Error {
                     message: format!("Failed to spawn pane: {e}"),
                 },
@@ -309,6 +331,10 @@ impl TurfDaemonServer {
                 if let Some(pane) = panes.remove(&pane_id) {
                     let mut handle = pane.pty_handle.lock().await;
                     let _ = handle.kill();
+                    let mut sessions = self.state.sessions.lock().await;
+                    for session in sessions.values_mut() {
+                        session.pane_ids.retain(|&id| id != pane_id);
+                    }
                     DaemonResponse::Success
                 } else {
                     DaemonResponse::Error {

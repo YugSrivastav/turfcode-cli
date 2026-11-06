@@ -1363,13 +1363,16 @@ dependencies = [
 name = "turf-tui"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "chrono",
  "crossterm",
  "ratatui",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
  "turf-core",
+ "turf-daemon",
  "turf-protocol",
  "turf-pty",
  "turf-vte",

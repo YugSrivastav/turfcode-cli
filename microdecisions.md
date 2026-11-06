@@ -603,6 +603,39 @@ All crewmates, contributors, and agents MUST adhere to these invariants when mod
 - **Reason:** Guarantees zero loss of in-flight compilation jobs, editors, or background servers upon terminal exit or crash, providing Herdr-level stability, resilience, and multi-session detachment.
 - **Worker Invariant:** Child processes spawned in `TurfDaemonServer` must never be killed upon client socket disconnect. IPC framing must use 4-byte big-endian length headers. Stale socket files must be safely detected and removed prior to listener binding.
 
+---
+
+## [MD-052] 2026-11-06: Thin-Client Cockpit Architecture, Daemon-Backed PTY Streaming, Detached Reconnection, and In-Process Fallback
+- **Context:** Following the establishment of the persistent background daemon and Unix domain socket IPC engine ([MD-051]), TurfCode's interactive spatial multiplexer cockpit (`crates/turf-tui`) required full decoupling from in-process PTY subprocess management into a true thin client:
+  1. Terminal presentation and frame rendering must run independently of PTY child processes. Closing, crashing, or detaching the TUI client must never terminate running shells, vim sessions, or long-running compiler jobs.
+  2. The cockpit must communicate with the background daemon over local Unix domain sockets / Windows Named Pipes using asynchronous `DaemonClient` IPC streams.
+  3. Interactive keystrokes in terminal focus must forward cleanly through `DaemonRequest::WritePane` / non-blocking channel streams.
+  4. Real-time PTY chunks from the daemon (`DaemonEvent::PaneOutput`) must drain smoothly into each tab's `VteTerminal` / `ScreenBuffer` without visual flicker or input lag.
+  5. The client must support instant, non-destructive detachment via `Alt+D` or `/detach`, allowing users to exit the cockpit while leaving child processes alive in the daemon.
+  6. Re-launching `turf` or `turfcode` (or `turf attach [session]`) must automatically discover running sessions, attach to existing panes, restore screen buffers, and resume live interaction.
+  7. In sandboxed, containerized, or headless CI environments where socket listeners or background daemon auto-spawning are restricted, the cockpit must fall back gracefully to standalone in-process execution.
+- **The Fork:** Retaining in-process PTY subprocess execution in `TerminalCockpit::new_live` vs. Architectural elevation to a thin-client cockpit abstraction (`TerminalCockpit::new_daemon`) backed by `PaneBackend::Daemon` with graceful `PaneBackend::Local` fallback.
+- **Resolution:** Option B: Full thin-client cockpit architecture with detached resilience and standalone fallback.
+  1. **Pane Execution Backend Abstraction (`crates/turf-tui/src/pane.rs`):**
+     - Introduced `PaneBackend` enum supporting `Daemon { pane_id: u64, client: DaemonClient }`, `Local(PtySession)`, and `Headless`.
+     - Updated `Pane` to route user keystrokes (`write_pty`) and resize events (`resize`) to the daemon via `DaemonClient` non-blocking IPC with async fallback.
+     - Extended `PaneManager` with `split_active_daemon` to dynamically split panes inside running daemon sessions.
+  2. **Thin-Client Cockpit Constructor & Event Loop Integration (`crates/turf-tui/src/cockpit.rs`):**
+     - Implemented `TerminalCockpit::new_daemon(client, session_code, role, username, rows, cols)` constructor.
+     - On initialization, queries existing panes for the session via `client.attach_session()`, pre-populates screen buffers using `client.read_pane()`, or spawns the initial pane via `client.spawn_pane()`.
+     - Integrated `poll_daemon_events()` into the 60fps frame loop, draining `broadcast::Receiver<DaemonEvent>` and dispatching `DaemonEvent::PaneOutput` directly to the target pane's VTE parser without blocking.
+     - Retained `new_standalone` (and `new_live` alias) for in-process execution.
+  3. **Detached Resilience & Reconnection (`Alt+D`):**
+     - Bound `Alt+D` shortcut and `/detach` command to `cockpit.detach()`, setting `is_detached = true` and `should_exit = true` after dispatching `DaemonRequest::DetachSession`.
+     - Leaves daemon child processes completely unaffected and running in background.
+     - In `crates/turf-net/src/cli.rs`, wired `main_cli()` to detect active daemon panes on launch and re-attach automatically via `run_attach()`. Added explicit `turf attach [id]` CLI command.
+  4. **Graceful Standalone Fallback (`crates/turf-net/src/cli.rs`):**
+     - Implemented `run_interactive_choice()`: attempts daemon auto-spawning via `ensure_daemon_running()` and `DaemonClient::connect()`. If daemon initialization fails or is unavailable, falls back cleanly to `TerminalCockpit::new_standalone` / `new_headless`.
+     - Integrated `run_interactive_choice()` across `run_host()`, `run_join()`, and `run_attach()`.
+- **Reason:** Achieves true separation of user interface presentation from process execution. Child processes survive terminal emulator closures and client detaches, matching Herdr-grade reliability and seamless multiplexer re-attachment.
+- **Worker Invariant:** TerminalCockpit in daemon mode must never kill child PTY processes upon exit or `Alt+D` detach. Keystrokes in terminal focus must forward through IPC non-blockingly to maintain 60fps frame rate. Standalone in-process mode must always remain available as a fallback when socket IPC is unavailable.
+
+
 
 
 

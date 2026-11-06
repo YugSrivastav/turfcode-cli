@@ -10,6 +10,7 @@ turf-vte = { path = "../turf-vte" }
 turf-pty = { path = "../turf-pty" }
 turf-protocol = { path = "../turf-protocol" }
 turf-core = { path = "../turf-core" }
+turf-daemon = { path = "../turf-daemon" }
 
 ratatui = { workspace = true }
 crossterm = { workspace = true }
@@ -18,7 +19,11 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 unicode-width = { workspace = true }
 chrono = "0.4"
+anyhow = { workspace = true }
 
 [[example]]
 name = "multiplexer_demo"
 path = "examples/multiplexer_demo.rs"
+
+[dev-dependencies]
+tempfile = "3"
