@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 use turf_protocol::ipc::{
-    DaemonEvent, DaemonRequest, DaemonResponse, DaemonStatus, IpcMessage, SessionInfo,
+    DaemonEvent, DaemonRequest, DaemonResponse, DaemonStatus, IpcMessage, PaneInfo, SessionInfo,
 };
 
 use crate::socket::{connect_stream, recv_ipc_message, send_ipc_message};
@@ -131,6 +131,14 @@ impl DaemonClient {
         match self.send_request(DaemonRequest::Status).await? {
             DaemonResponse::StatusResult(status) => Ok(status),
             other => anyhow::bail!("Unexpected response to status query: {:?}", other),
+        }
+    }
+
+    /// Query pane details including alive status and foreground command (`pane.info`).
+    pub async fn pane_info(&self, pane_id: usize) -> anyhow::Result<PaneInfo> {
+        match self.send_request(DaemonRequest::PaneInfo { pane_id }).await? {
+            DaemonResponse::PaneInfoResult(info) => Ok(info),
+            other => anyhow::bail!("Unexpected response to pane info query: {:?}", other),
         }
     }
 

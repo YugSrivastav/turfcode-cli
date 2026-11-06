@@ -380,9 +380,28 @@ impl TerminalCockpit {
 
         let mut total_bytes = 0;
         for event in events {
-            if let DaemonEvent::PaneOutput { pane_id, bytes } = event {
-                total_bytes += bytes.len();
-                self.feed_pane_output(pane_id, &bytes);
+            match event {
+                DaemonEvent::PaneOutput { pane_id, bytes } => {
+                    total_bytes += bytes.len();
+                    self.feed_pane_output(pane_id, &bytes);
+                }
+                DaemonEvent::PaneStatusChanged { pane_id, foreground_cmd } => {
+                    for tab in &mut self.tabs {
+                        for pane in tab.pane_manager.all_panes_mut() {
+                            let matches = match &pane.backend {
+                                PaneBackend::Daemon { pane_id: pid, .. } => *pid as usize == pane_id,
+                                _ => pane.id == pane_id,
+                            };
+                            if matches {
+                                pane.foreground_cmd = foreground_cmd.clone();
+                                if let Some(cmd) = &foreground_cmd {
+                                    pane.title = cmd.clone();
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         total_bytes
@@ -416,6 +435,13 @@ impl TerminalCockpit {
                     let _ = client.detach_session(&session_id).await;
                 });
             }
+        }
+    }
+
+    /// Refresh process titles across all tabs and panes.
+    pub fn refresh_process_titles(&mut self) {
+        for tab in &mut self.tabs {
+            tab.pane_manager.refresh_process_titles();
         }
     }
 
@@ -817,9 +843,23 @@ impl TerminalCockpit {
                 } else {
                     String::new()
                 };
+                let fg_cmd = t
+                    .pane_manager
+                    .active_pane()
+                    .and_then(|p| p.foreground_cmd.clone())
+                    .or_else(|| {
+                        let active = t.pane_manager.active_pane()?;
+                        if !active.title.is_empty() && active.title != "Shell 1" {
+                            Some(active.title.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .map(|cmd| if badge.is_empty() { cmd } else { format!("{}{}", cmd, badge) });
                 TabItem {
                     id: t.id,
                     title: format!("{}{}", t.title, badge),
+                    foreground_cmd: fg_cmd,
                 }
             })
             .collect();

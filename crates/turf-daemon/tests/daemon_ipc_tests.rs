@@ -425,3 +425,83 @@ async fn test_kill_session_reaps_child_ptys() {
     server.shutdown();
     let _ = server_task.await;
 }
+
+#[tokio::test]
+async fn test_periodic_foreground_process_sampling_and_status_changed_event() {
+    let dir = tempdir().expect("Failed to create tempdir");
+    let sock_path = dir.path().join("process_introspection.sock");
+
+    let server = TurfDaemonServer::new(&sock_path);
+    let server_task = tokio::spawn({
+        let server = server.clone();
+        async move { server.run().await }
+    });
+
+    for _ in 0..50 {
+        if sock_path.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let client = DaemonClient::connect(&sock_path)
+        .await
+        .expect("Failed to connect client");
+
+    let mut event_rx = client.subscribe();
+
+    // Spawn a shell pane
+    let pane_id = client
+        .spawn_pane(1, None, None)
+        .await
+        .expect("Failed to spawn pane");
+    assert!(pane_id > 0);
+
+    // Wait for the background sampler or event loop to detect foreground process and emit PaneStatusChanged
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
+    let mut status_detected = false;
+    let mut detected_cmd = None;
+
+    while tokio::time::Instant::now() < deadline {
+        tokio::select! {
+            event_res = event_rx.recv() => {
+                if let Ok(DaemonEvent::PaneStatusChanged { pane_id: event_pid, foreground_cmd }) = event_res {
+                    if event_pid == pane_id && foreground_cmd.is_some() {
+                        status_detected = true;
+                        detected_cmd = foreground_cmd;
+                        break;
+                    }
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_millis(20)) => {
+                // Also query pane_info directly
+                if let Ok(info) = client.pane_info(pane_id).await {
+                    if info.foreground_cmd.is_some() {
+                        status_detected = true;
+                        detected_cmd = info.foreground_cmd;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        assert!(
+            status_detected,
+            "Daemon should emit PaneStatusChanged or report foreground_cmd in pane_info"
+        );
+        let cmd = detected_cmd.expect("Expected detected foreground command");
+        assert!(cmd.contains("sh") || cmd.contains("bash") || cmd.contains("zsh"));
+    }
+
+    // Verify pane_info returns is_alive = true
+    let info = client.pane_info(pane_id).await.expect("Failed to query pane info");
+    assert_eq!(info.pane_id, pane_id);
+    assert_eq!(info.tab_id, 1);
+    assert!(info.is_alive);
+
+    server.shutdown();
+    let _ = server_task.await;
+}

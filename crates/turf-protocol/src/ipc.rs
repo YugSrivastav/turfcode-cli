@@ -36,6 +36,15 @@ impl SessionInfo {
     }
 }
 
+/// Detailed information about an active terminal pane.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneInfo {
+    pub pane_id: usize,
+    pub tab_id: usize,
+    pub is_alive: bool,
+    pub foreground_cmd: Option<String>,
+}
+
 /// Request commands dispatched to the TurfCode background daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -82,6 +91,8 @@ pub enum DaemonRequest {
         #[serde(default)]
         lines: Option<usize>,
     },
+    /// Query pane details and foreground command (`pane.info`).
+    PaneInfo { pane_id: usize },
     /// List all known workspaces (`workspace.list`).
     ListWorkspaces,
     /// Gracefully shutdown the daemon process (`server.shutdown`).
@@ -106,6 +117,7 @@ impl DaemonRequest {
             Self::ClosePane { .. } => "pane.close",
             Self::PaneSendKeys { .. } => "pane.send_keys",
             Self::PaneReadLines { .. } => "pane.read_lines",
+            Self::PaneInfo { .. } => "pane.info",
             Self::ListWorkspaces => "workspace.list",
             Self::Shutdown => "server.shutdown",
         }
@@ -122,6 +134,8 @@ pub enum DaemonResponse {
     PaneSpawned { pane_id: usize },
     /// Buffer content from a pane read.
     PaneReadResult { data: Vec<u8> },
+    /// Detailed pane information response.
+    PaneInfoResult(PaneInfo),
     /// Generic success acknowledgement.
     Success,
     /// Error notification with description.
@@ -168,6 +182,11 @@ pub enum DaemonEvent {
     PaneExited {
         pane_id: usize,
         exit_code: Option<i32>,
+    },
+    /// Notification that a pane's status or foreground process changed.
+    PaneStatusChanged {
+        pane_id: usize,
+        foreground_cmd: Option<String>,
     },
     /// State change notification across sessions or workspaces.
     StateDelta { description: String },
@@ -386,5 +405,37 @@ mod tests {
         let encoded_resp = encode_frame(&lines_resp).unwrap();
         let (decoded_resp, _) = decode_frame(&encoded_resp).unwrap().unwrap();
         assert_eq!(decoded_resp, lines_resp);
+    }
+
+    #[test]
+    fn test_pane_status_changed_event_roundtrip() {
+        let event_msg = IpcMessage::Event {
+            event: DaemonEvent::PaneStatusChanged {
+                pane_id: 3,
+                foreground_cmd: Some("vim main.rs".to_string()),
+            },
+        };
+
+        let encoded = encode_frame(&event_msg).unwrap();
+        let (decoded, consumed) = decode_frame(&encoded).unwrap().unwrap();
+        assert_eq!(decoded, event_msg);
+        assert_eq!(consumed, encoded.len());
+    }
+
+    #[test]
+    fn test_pane_info_response_roundtrip() {
+        let resp = IpcMessage::Response {
+            id: 88,
+            response: DaemonResponse::PaneInfoResult(PaneInfo {
+                pane_id: 2,
+                tab_id: 1,
+                is_alive: true,
+                foreground_cmd: Some("cargo test".to_string()),
+            }),
+        };
+
+        let encoded = encode_frame(&resp).unwrap();
+        let (decoded, _) = decode_frame(&encoded).unwrap().unwrap();
+        assert_eq!(decoded, resp);
     }
 }

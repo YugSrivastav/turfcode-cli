@@ -22,6 +22,6 @@ pub use input::InputState;
 pub use layout::CockpitLayout;
 pub use pane::{Pane, PaneBackend, PaneManager, PaneNode, SplitDirection};
 pub use sidebar::{PeerInfo, SidebarState};
-pub use tabs::TabItem;
+pub use tabs::{render_tab_strip, TabItem};
 pub use theme::Theme;
 pub use vte_blit::blit_screen_buffer;

@@ -1352,6 +1352,7 @@ dependencies = [
 name = "turf-pty"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "portable-pty",
  "thiserror 1.0.69",
  "tokio",

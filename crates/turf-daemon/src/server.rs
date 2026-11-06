@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use tokio::sync::{broadcast, mpsc, watch, Mutex};
 use turf_protocol::ipc::{
-    DaemonEvent, DaemonRequest, DaemonResponse, DaemonStatus, IpcMessage, SessionInfo,
+    DaemonEvent, DaemonRequest, DaemonResponse, DaemonStatus, IpcMessage, PaneInfo, SessionInfo,
 };
 use turf_pty::{PtyOptions, PtyProcessHandle, PtySession, PtyWriter};
 use turf_vte::Terminal;
@@ -37,6 +37,7 @@ pub struct DaemonPane {
     pub pty_handle: Arc<Mutex<PtyProcessHandle>>,
     pub is_alive: Arc<AtomicBool>,
     pub exit_code: Arc<Mutex<Option<i32>>>,
+    pub foreground_cmd: Arc<Mutex<Option<String>>>,
     pub created_at: Instant,
 }
 
@@ -57,6 +58,13 @@ struct ServerState {
 #[derive(Clone)]
 pub struct TurfDaemonServer {
     state: Arc<ServerState>,
+}
+
+struct PaneSampleTarget {
+    id: usize,
+    pty_handle: Arc<Mutex<PtyProcessHandle>>,
+    is_alive: Arc<AtomicBool>,
+    foreground_cmd: Arc<Mutex<Option<String>>>,
 }
 
 impl TurfDaemonServer {
@@ -128,6 +136,25 @@ impl TurfDaemonServer {
 
         let mut shutdown_rx = self.state.shutdown_rx.clone();
 
+        // Background task to periodically sample foreground processes and broadcast PaneStatusChanged events
+        let sampler_server = self.clone();
+        let mut sampler_shutdown_rx = self.state.shutdown_rx.clone();
+        let sampler_handle = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(150));
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        sampler_server.sample_foreground_processes().await;
+                    }
+                    _ = sampler_shutdown_rx.changed() => {
+                        if *sampler_shutdown_rx.borrow() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
         loop {
             tokio::select! {
                 accept_res = listener.accept() => {
@@ -154,12 +181,50 @@ impl TurfDaemonServer {
             }
         }
 
+        sampler_handle.abort();
+
         // Clean up socket file on exit
         if self.state.socket_path.exists() {
             let _ = std::fs::remove_file(&self.state.socket_path);
         }
 
         Ok(())
+    }
+
+    /// Periodically sample foreground processes for spawned PTYs and emit `DaemonEvent::PaneStatusChanged`.
+    pub async fn sample_foreground_processes(&self) {
+        let targets: Vec<PaneSampleTarget> = {
+            let panes = self.state.panes.lock().await;
+            panes
+                .values()
+                .map(|p| PaneSampleTarget {
+                    id: p.id,
+                    pty_handle: Arc::clone(&p.pty_handle),
+                    is_alive: Arc::clone(&p.is_alive),
+                    foreground_cmd: Arc::clone(&p.foreground_cmd),
+                })
+                .collect()
+        };
+
+        for target in targets {
+            if !target.is_alive.load(Ordering::SeqCst) {
+                continue;
+            }
+
+            let new_cmd = {
+                let handle = target.pty_handle.lock().await;
+                handle.foreground_process().map(|p| p.display_cmd())
+            };
+
+            let mut current_cmd = target.foreground_cmd.lock().await;
+            if *current_cmd != new_cmd {
+                *current_cmd = new_cmd.clone();
+                let _ = self.state.event_tx.send(DaemonEvent::PaneStatusChanged {
+                    pane_id: target.id,
+                    foreground_cmd: new_cmd,
+                });
+            }
+        }
     }
 
     /// Handle a single incoming client connection stream.
@@ -528,6 +593,23 @@ impl TurfDaemonServer {
                     }
                 }
             }
+            DaemonRequest::PaneInfo { pane_id } => {
+                let panes = self.state.panes.lock().await;
+                if let Some(pane) = panes.get(&pane_id) {
+                    let is_alive = pane.is_alive.load(Ordering::SeqCst);
+                    let foreground_cmd = pane.foreground_cmd.lock().await.clone();
+                    DaemonResponse::PaneInfoResult(PaneInfo {
+                        pane_id,
+                        tab_id: pane.tab_id,
+                        is_alive,
+                        foreground_cmd,
+                    })
+                } else {
+                    DaemonResponse::Error {
+                        message: format!("Pane ID {pane_id} not found"),
+                    }
+                }
+            }
             DaemonRequest::ListWorkspaces => {
                 let workspaces = self.state.workspaces.lock().await.clone();
                 DaemonResponse::WorkspacesResult { workspaces }
@@ -573,6 +655,7 @@ impl TurfDaemonServer {
         let pty_handle = Arc::new(Mutex::new(handle));
         let is_alive = Arc::new(AtomicBool::new(true));
         let exit_code = Arc::new(Mutex::new(None));
+        let foreground_cmd = Arc::new(Mutex::new(None));
 
         // Background task to read PTY bytes, feed into Terminal, and broadcast output events
         let term_clone = Arc::clone(&terminal);
@@ -580,6 +663,7 @@ impl TurfDaemonServer {
         let is_alive_clone = Arc::clone(&is_alive);
         let exit_code_clone = Arc::clone(&exit_code);
         let handle_clone = Arc::clone(&pty_handle);
+        let foreground_cmd_clone = Arc::clone(&foreground_cmd);
 
         tokio::spawn(async move {
             while let Some(chunk) = reader.recv().await {
@@ -603,9 +687,14 @@ impl TurfDaemonServer {
                 }
             };
             *exit_code_clone.lock().await = code;
+            *foreground_cmd_clone.lock().await = None;
             let _ = event_tx_clone.send(DaemonEvent::PaneExited {
                 pane_id,
                 exit_code: code,
+            });
+            let _ = event_tx_clone.send(DaemonEvent::PaneStatusChanged {
+                pane_id,
+                foreground_cmd: None,
             });
         });
 
@@ -618,6 +707,7 @@ impl TurfDaemonServer {
             pty_handle,
             is_alive,
             exit_code,
+            foreground_cmd,
             created_at: Instant::now(),
         };
 
