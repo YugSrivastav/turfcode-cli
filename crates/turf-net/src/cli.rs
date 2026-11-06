@@ -41,6 +41,7 @@ pub fn print_help() {
   \x1b[32mturf\x1b[0m                     Alias for turfcode
   \x1b[32mturf host [dir]\x1b[0m          Host a shared Turf session in the given directory (default: .)
   \x1b[32mturf join <id> [url]\x1b[0m     Join an active Turf session using room code
+  \x1b[32mturf attach [id]\x1b[0m         Attach to an active background daemon session (default: default)
   \x1b[32mturf daemon start\x1b[0m        Start the persistent background daemon
   \x1b[32mturf daemon stop\x1b[0m         Stop the running background daemon
   \x1b[32mturf daemon status\x1b[0m       Show background daemon process and socket status
@@ -122,6 +123,74 @@ pub fn normalize_workspace_path(input: &str) -> PathBuf {
     }
 }
 
+/// Boot the interactive cockpit backed by the background daemon thin client,
+/// falling back cleanly to in-process standalone mode if daemon is unavailable.
+pub async fn run_interactive_choice(
+    session_code: &str,
+    role: &str,
+    username: &str,
+    rows: u16,
+    cols: u16,
+) -> TerminalCockpit {
+    match turf_daemon::ensure_daemon_running().await {
+        Ok(sock_path) => {
+            match turf_daemon::DaemonClient::connect(&sock_path).await {
+                Ok(client) => {
+                    match TerminalCockpit::new_daemon(
+                        client,
+                        session_code,
+                        role,
+                        username,
+                        rows,
+                        cols,
+                    )
+                    .await
+                    {
+                        Ok(cockpit) => {
+                            tracing::info!(
+                                "Connected thin-client cockpit to daemon at {}",
+                                sock_path.display()
+                            );
+                            return cockpit;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to initialize daemon cockpit: {}; falling back to standalone",
+                                e
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to connect to daemon at {}: {}; falling back to standalone",
+                        sock_path.display(),
+                        e
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                "Daemon auto-start failed: {}; falling back to standalone",
+                e
+            );
+        }
+    }
+
+    // Graceful fallback to standalone in-process mode
+    TerminalCockpit::new_standalone(session_code, role, username, rows, cols)
+        .unwrap_or_else(|_| {
+            TerminalCockpit::new_headless(
+                session_code,
+                role,
+                username,
+                rows as usize,
+                cols as usize,
+            )
+        })
+}
+
 /// Host a TurfCode session in the target directory.
 pub async fn run_host(target_dir: &Path, port: u16) -> Result<(), NetError> {
     if !target_dir.exists() {
@@ -167,22 +236,14 @@ pub async fn run_host(target_dir: &Path, port: u16) -> Result<(), NetError> {
         let mut terminal = Terminal::new(backend)?;
         let size = terminal.size()?;
 
-        let mut cockpit = TerminalCockpit::new_live(
+        let mut cockpit = run_interactive_choice(
             &room_code,
             "HOST",
             &username,
             size.height,
             size.width,
         )
-        .unwrap_or_else(|_| {
-            TerminalCockpit::new_headless(
-                &room_code,
-                "HOST",
-                &username,
-                size.height as usize,
-                size.width as usize,
-            )
-        });
+        .await;
 
         let space_name = target_dir
             .file_name()
@@ -323,22 +384,14 @@ pub async fn run_join(room_code: &str, ws_url: &str) -> Result<(), NetError> {
         let mut terminal = Terminal::new(backend)?;
         let size = terminal.size()?;
 
-        let mut cockpit = TerminalCockpit::new_live(
+        let mut cockpit = run_interactive_choice(
             &clean_code,
             "PEER",
             &username,
             size.height,
             size.width,
         )
-        .unwrap_or_else(|_| {
-            TerminalCockpit::new_headless(
-                &clean_code,
-                "PEER",
-                &username,
-                size.height as usize,
-                size.width as usize,
-            )
-        });
+        .await;
 
         cockpit.sidebar_state.current_space = format!("turf-{clean_code}");
         cockpit.sidebar_state.tasks = client.tasks().await;
@@ -484,6 +537,55 @@ pub async fn run_join(room_code: &str, ws_url: &str) -> Result<(), NetError> {
     Ok(())
 }
 
+/// Attach directly to a running or new TurfCode daemon session.
+pub async fn run_attach(session_code: &str) -> Result<(), NetError> {
+    let clean_code = crypto::normalize_room_code(session_code);
+    let username = env::var("USER")
+        .or_else(|_| env::var("USERNAME"))
+        .unwrap_or_else(|_| "User".into());
+
+    let is_terminal = io::stdout().is_terminal() && !env::args().any(|arg| arg == "--no-cockpit");
+    if is_terminal {
+        let stdout = io::stdout();
+        let backend = CrosstermBackend::new(stdout);
+        let mut terminal = Terminal::new(backend)?;
+        let size = terminal.size()?;
+
+        let mut cockpit = run_interactive_choice(
+            &clean_code,
+            "CLIENT",
+            &username,
+            size.height,
+            size.width,
+        )
+        .await;
+
+        cockpit.sidebar_state.current_space = format!("turf-{clean_code}");
+        cockpit.sidebar_state.peers = vec![PeerInfo {
+            name: username.clone(),
+            role: "CLIENT".to_string(),
+            is_self: true,
+            is_online: true,
+        }];
+
+        cockpit.run_event_loop(&mut terminal)?;
+
+        if cockpit.is_detached {
+            println!(
+                "\n  \x1b[1;32m✔ Detached cleanly from session {}.\x1b[0m Child processes continue in background.",
+                clean_code
+            );
+            println!("  \x1b[2mTo re-attach, run: turf attach {}\x1b[0m\n", clean_code);
+        } else {
+            println!("\n  Exited TurfCode session {}.", clean_code);
+        }
+    } else {
+        println!("Headless mode: session {} active in daemon.", clean_code);
+    }
+
+    Ok(())
+}
+
 /// Interactive launcher prompt conforming to [MD-041].
 pub async fn run_interactive_prompt() -> Result<(), NetError> {
     print_splash();
@@ -492,9 +594,10 @@ pub async fn run_interactive_prompt() -> Result<(), NetError> {
         "  \x1b[32m[1]\x1b[0m Create a Turf   \x1b[2m(Host a local folder / live session)\x1b[0m"
     );
     println!("  \x1b[32m[2]\x1b[0m Join a Turf     \x1b[2m(Connect to an active room code)\x1b[0m");
-    println!("  \x1b[2m[3] Exit\x1b[0m\n");
+    println!("  \x1b[32m[3]\x1b[0m Attach Session  \x1b[2m(Re-attach to background daemon session)\x1b[0m");
+    println!("  \x1b[2m[4] Exit\x1b[0m\n");
 
-    print!("  \x1b[32mSelect option [1-3]: \x1b[0m");
+    print!("  \x1b[32mSelect option [1-4]: \x1b[0m");
     io::stdout().flush().ok();
 
     let mut line = String::new();
@@ -524,6 +627,17 @@ pub async fn run_interactive_prompt() -> Result<(), NetError> {
             let room_code = code_line.trim();
 
             run_join(room_code, "ws://127.0.0.1:7873").await?;
+        }
+        "3" => {
+            print!("\x1b[2J\x1b[1;1H");
+            print_splash();
+            print!("  \x1b[32mSession ID [default: default]: \x1b[0m");
+            io::stdout().flush().ok();
+            let mut code_line = String::new();
+            stdin.lock().read_line(&mut code_line).ok();
+            let trimmed = code_line.trim();
+            let session_code = if trimmed.is_empty() { "default" } else { trimmed };
+            run_attach(session_code).await?;
         }
         _ => {
             println!("  Exiting.");
@@ -646,6 +760,18 @@ pub async fn main_cli() -> Result<(), Box<dyn std::error::Error>> {
         match turf_daemon::ensure_daemon_running().await {
             Ok(sock_path) => {
                 tracing::info!("Connected to TurfCode daemon at {}", sock_path.display());
+                if let Ok(client) = turf_daemon::DaemonClient::connect(&sock_path).await {
+                    if let Ok(status) = client.status().await {
+                        if status.active_panes > 0 {
+                            tracing::info!(
+                                "Active panes ({}) detected in background daemon; re-attaching...",
+                                status.active_panes
+                            );
+                            run_attach("default").await?;
+                            return Ok(());
+                        }
+                    }
+                }
             }
             Err(e) => {
                 tracing::warn!(
@@ -665,6 +791,10 @@ pub async fn main_cli() -> Result<(), Box<dyn std::error::Error>> {
         }
         "--version" | "-v" => {
             println!("turfcode v{}", VERSION);
+        }
+        "attach" => {
+            let session_code = args.get(2).map(|s| s.as_str()).unwrap_or("default");
+            run_attach(session_code).await?;
         }
         "daemon" => {
             handle_daemon_cli(&args[2..]).await?;
@@ -751,5 +881,14 @@ mod tests {
     async fn test_daemon_cli_stop_when_stopped() {
         let res = handle_daemon_cli(&["stop".to_string()]).await;
         assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_run_interactive_choice_fallback() {
+        let cockpit = run_interactive_choice("TURF-TEST-CHOICE", "HOST", "tester", 24, 80).await;
+        assert_eq!(cockpit.session_code, "TURF-TEST-CHOICE");
+        assert_eq!(cockpit.role, "HOST");
+        assert_eq!(cockpit.username, "tester");
+        assert_eq!(cockpit.tabs.len(), 1);
     }
 }

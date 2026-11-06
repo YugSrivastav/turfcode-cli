@@ -18,13 +18,16 @@ use ratatui::backend::Backend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::Terminal as RatTerminal;
+use tokio::sync::broadcast;
+use turf_daemon::DaemonClient;
 use turf_protocol::intent::{TaskCard, TaskStatus};
+use turf_protocol::ipc::DaemonEvent;
 use turf_protocol::locks::FileLock;
 
 use crate::input::{render_input_bar, InputState};
 use crate::keys::key_to_bytes;
 use crate::layout::CockpitLayout;
-use crate::pane::{Pane, PaneManager, SplitDirection};
+use crate::pane::{Pane, PaneBackend, PaneManager, SplitDirection};
 use crate::sidebar::{render_sidebar, SidebarState};
 use crate::tabs::{render_tab_strip, TabItem};
 
@@ -55,7 +58,10 @@ pub struct TerminalCockpit {
     pub focus: FocusArea,
     pub input_state: InputState,
     pub should_exit: bool,
+    pub is_detached: bool,
     pub next_tab_id: usize,
+    pub daemon_client: Option<DaemonClient>,
+    pub daemon_event_rx: Option<broadcast::Receiver<DaemonEvent>>,
 }
 
 impl TerminalCockpit {
@@ -85,12 +91,15 @@ impl TerminalCockpit {
             focus: FocusArea::Terminal,
             input_state: InputState::default(),
             should_exit: false,
+            is_detached: false,
             next_tab_id: 2,
+            daemon_client: None,
+            daemon_event_rx: None,
         }
     }
 
-    /// Initialize a new TerminalCockpit with live PTY shell panes.
-    pub fn new_live(
+    /// Initialize a new TerminalCockpit with live in-process PTY shell panes.
+    pub fn new_standalone(
         session_code: impl Into<String>,
         role: impl Into<String>,
         username: impl Into<String>,
@@ -115,7 +124,103 @@ impl TerminalCockpit {
             focus: FocusArea::Terminal,
             input_state: InputState::default(),
             should_exit: false,
+            is_detached: false,
             next_tab_id: 2,
+            daemon_client: None,
+            daemon_event_rx: None,
+        })
+    }
+
+    /// Initialize a new TerminalCockpit with live PTY shell panes (standalone alias).
+    pub fn new_live(
+        session_code: impl Into<String>,
+        role: impl Into<String>,
+        username: impl Into<String>,
+        rows: u16,
+        cols: u16,
+    ) -> Result<Self, turf_pty::PtyError> {
+        Self::new_standalone(session_code, role, username, rows, cols)
+    }
+
+    /// Initialize a new thin-client TerminalCockpit connected to the background daemon.
+    pub async fn new_daemon(
+        client: DaemonClient,
+        session_code: impl Into<String>,
+        role: impl Into<String>,
+        username: impl Into<String>,
+        rows: u16,
+        cols: u16,
+    ) -> anyhow::Result<Self> {
+        let session_code_str = session_code.into();
+        let existing_panes = client.attach_session(&session_code_str).await.unwrap_or_default();
+        let event_rx = client.subscribe();
+
+        let mut initial_panes = Vec::new();
+        if !existing_panes.is_empty() {
+            for (idx, &pane_id) in existing_panes.iter().enumerate() {
+                let mut p = Pane::new_daemon(
+                    idx + 1,
+                    format!("Shell {}", idx + 1),
+                    pane_id as u64,
+                    client.clone(),
+                    rows,
+                    cols,
+                );
+                if let Ok(buffer_bytes) = client.read_pane(pane_id).await {
+                    let text = String::from_utf8_lossy(&buffer_bytes);
+                    for (y, line) in text.lines().enumerate() {
+                        let trimmed = line.trim_end();
+                        if !trimmed.is_empty() {
+                            p.terminal.process_str(&format!("\x1b[{};1H{}", y + 1, trimmed));
+                        }
+                    }
+                }
+                initial_panes.push(p);
+            }
+        } else {
+            let daemon_pane_id = client.spawn_pane(1, None, None).await?;
+            let p = Pane::new_daemon(
+                1,
+                "Shell 1",
+                daemon_pane_id as u64,
+                client.clone(),
+                rows,
+                cols,
+            );
+            initial_panes.push(p);
+        }
+
+        let first_pane = initial_panes.remove(0);
+        let mut pane_manager = PaneManager::new(first_pane);
+        for remaining_pane in initial_panes {
+            pane_manager.split_active_daemon(
+                SplitDirection::Vertical,
+                remaining_pane.daemon_pane_id().unwrap_or(1),
+                client.clone(),
+            );
+        }
+
+        let tab = Tab {
+            id: 1,
+            title: "Shell".to_string(),
+            pane_manager,
+        };
+
+        Ok(Self {
+            session_code: session_code_str,
+            role: role.into(),
+            username: username.into(),
+            sidebar_visible: true,
+            sidebar_state: SidebarState::default(),
+            tabs: vec![tab],
+            active_tab_index: 0,
+            focus: FocusArea::Terminal,
+            input_state: InputState::default(),
+            should_exit: false,
+            is_detached: false,
+            next_tab_id: 2,
+            daemon_client: Some(client),
+            daemon_event_rx: Some(event_rx),
         })
     }
 
@@ -264,13 +369,98 @@ impl TerminalCockpit {
         total
     }
 
-    /// Add a tab automatically using live shell if available, or headless fallback.
+    /// Poll and drain asynchronous broadcast events from the daemon.
+    pub fn poll_daemon_events(&mut self) -> usize {
+        let mut events = Vec::new();
+        if let Some(rx) = &mut self.daemon_event_rx {
+            while let Ok(event) = rx.try_recv() {
+                events.push(event);
+            }
+        }
+
+        let mut total_bytes = 0;
+        for event in events {
+            if let DaemonEvent::PaneOutput { pane_id, bytes } = event {
+                total_bytes += bytes.len();
+                self.feed_pane_output(pane_id, &bytes);
+            }
+        }
+        total_bytes
+    }
+
+    /// Feed incoming streaming bytes directly into the target pane's VTE parser.
+    pub fn feed_pane_output(&mut self, target_pane_id: usize, bytes: &[u8]) {
+        for tab in &mut self.tabs {
+            for pane in tab.pane_manager.all_panes_mut() {
+                let matches = match &pane.backend {
+                    PaneBackend::Daemon { pane_id, .. } => *pane_id as usize == target_pane_id,
+                    _ => pane.id == target_pane_id,
+                };
+                if matches {
+                    pane.terminal.process(bytes);
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Gracefully detach from the daemon session without killing child processes or stopping the daemon.
+    pub fn detach(&mut self) {
+        self.is_detached = true;
+        self.should_exit = true;
+        if let Some(client) = &self.daemon_client {
+            let client = client.clone();
+            let session_id = self.session_code.clone();
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    let _ = client.detach_session(&session_id).await;
+                });
+            }
+        }
+    }
+
+    /// Add a tab automatically using daemon if available, live shell, or headless fallback.
     pub fn add_tab_auto(&mut self, title: &str) -> usize {
+        if let Some(client) = self.daemon_client.clone() {
+            let tab_id = self.next_tab_id;
+            self.next_tab_id += 1;
+            let title_str = title.to_string();
+
+            let pid_opt = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                let client_c = client.clone();
+                tokio::task::block_in_place(|| {
+                    handle.block_on(async {
+                        client_c.spawn_pane(tab_id, None, None).await.ok()
+                    })
+                })
+            } else {
+                None
+            };
+
+            let daemon_pid = pid_opt.unwrap_or(tab_id) as u64;
+            let initial_pane = Pane::new_daemon(
+                1,
+                format!("{title_str} 1"),
+                daemon_pid,
+                client,
+                24,
+                80,
+            );
+            let tab = Tab {
+                id: tab_id,
+                title: title_str,
+                pane_manager: PaneManager::new(initial_pane),
+            };
+            self.tabs.push(tab);
+            self.active_tab_index = self.tabs.len() - 1;
+            return tab_id;
+        }
+
         let is_headless = self
             .tabs
             .first()
             .and_then(|t| t.pane_manager.active_pane())
-            .is_none_or(|p| p.pty.is_none());
+            .is_none_or(|p| p.is_headless());
 
         if is_headless {
             self.add_tab_headless(title)
@@ -279,10 +469,33 @@ impl TerminalCockpit {
         }
     }
 
-    /// Split active pane automatically using live shell if available, or headless fallback.
+    /// Split active pane automatically using daemon if available, live shell, or headless fallback.
     pub fn split_active_pane_auto(&mut self, direction: SplitDirection) -> usize {
         if let Some(tab) = self.tabs.get_mut(self.active_tab_index) {
-            let is_headless = tab.pane_manager.active_pane().is_none_or(|p| p.pty.is_none());
+            if let Some(client) = self.daemon_client.clone() {
+                let active_pane = tab.pane_manager.active_pane();
+                let parent_daemon_pid = active_pane.and_then(|p| p.daemon_pane_id()).unwrap_or(1) as usize;
+                let dir_str = match direction {
+                    SplitDirection::Vertical => "vertical",
+                    SplitDirection::Horizontal => "horizontal",
+                };
+
+                let pid_opt = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                    let client_c = client.clone();
+                    tokio::task::block_in_place(|| {
+                        handle.block_on(async {
+                            client_c.split_pane(parent_daemon_pid, dir_str).await.ok()
+                        })
+                    })
+                } else {
+                    None
+                };
+
+                let new_daemon_pid = pid_opt.unwrap_or(parent_daemon_pid + 1) as u64;
+                return tab.pane_manager.split_active_daemon(direction, new_daemon_pid, client);
+            }
+
+            let is_headless = tab.pane_manager.active_pane().is_none_or(|p| p.is_headless());
             if is_headless {
                 tab.pane_manager.split_active_headless(direction)
             } else {
@@ -362,6 +575,9 @@ impl TerminalCockpit {
             "/sidebar" => {
                 self.toggle_sidebar();
             }
+            "/detach" => {
+                self.detach();
+            }
             _ => {}
         }
     }
@@ -376,7 +592,15 @@ impl TerminalCockpit {
             return true;
         }
 
-        // --- 2. Alt+Enter toggles prompt focus ---
+        // --- 2. Detach shortcut (Alt+D) ---
+        if key.modifiers.contains(KeyModifiers::ALT)
+            && matches!(key.code, KeyCode::Char('d') | KeyCode::Char('D'))
+        {
+            self.detach();
+            return true;
+        }
+
+        // --- 3. Alt+Enter toggles prompt focus ---
         if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Enter {
             self.focus = if self.focus == FocusArea::Input {
                 FocusArea::Terminal
@@ -608,6 +832,7 @@ impl TerminalCockpit {
 
             // 1. Drain live PTY chunks into terminal emulators
             self.poll_ptys();
+            self.poll_daemon_events();
 
             // 2. Blit Ratatui frame (diff-based 60fps render with zero flicker)
             terminal.draw(|f| {

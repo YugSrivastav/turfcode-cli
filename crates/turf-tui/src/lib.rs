@@ -20,7 +20,7 @@ pub mod vte_blit;
 pub use cockpit::{FocusArea, TerminalCockpit};
 pub use input::InputState;
 pub use layout::CockpitLayout;
-pub use pane::{Pane, PaneManager, PaneNode, SplitDirection};
+pub use pane::{Pane, PaneBackend, PaneManager, PaneNode, SplitDirection};
 pub use sidebar::{PeerInfo, SidebarState};
 pub use tabs::TabItem;
 pub use theme::Theme;

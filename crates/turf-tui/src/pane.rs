@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use turf_daemon::DaemonClient;
 use turf_pty::{PtyOptions, PtySession};
 use turf_vte::Terminal;
 
@@ -211,12 +212,37 @@ impl PaneNode {
     }
 }
 
+/// Execution backend backing a multiplexer terminal pane.
+pub enum PaneBackend {
+    /// Local in-process PTY session.
+    Local(PtySession),
+    /// Thin-client streaming connection to background daemon PTY.
+    Daemon {
+        pane_id: u64,
+        client: DaemonClient,
+    },
+    /// Headless terminal (in-memory only, for tests or manual feed).
+    Headless,
+}
+
+impl std::fmt::Debug for PaneBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Local(_) => write!(f, "PaneBackend::Local(..)"),
+            Self::Daemon { pane_id, .. } => {
+                write!(f, "PaneBackend::Daemon {{ pane_id: {} }}", pane_id)
+            }
+            Self::Headless => write!(f, "PaneBackend::Headless"),
+        }
+    }
+}
+
 /// A single borderless terminal multiplexer pane.
 pub struct Pane {
     pub id: usize,
     pub title: String,
     pub terminal: Terminal,
-    pub pty: Option<PtySession>,
+    pub backend: PaneBackend,
     pub current_rect: Rect,
 }
 
@@ -227,27 +253,92 @@ impl Pane {
             id,
             title: title.into(),
             terminal: Terminal::new(rows, cols),
-            pty: None,
+            backend: PaneBackend::Headless,
             current_rect: Rect::new(0, 0, cols as u16, rows as u16),
         }
     }
 
-    /// Spawn a live PTY session backed terminal pane.
+    /// Spawn a live in-process PTY session backed terminal pane.
     pub fn spawn_shell(id: usize, title: impl Into<String>, rows: u16, cols: u16) -> Result<Self, turf_pty::PtyError> {
         let pty = PtySession::spawn(PtyOptions::new(rows.max(1), cols.max(1)))?;
         Ok(Self {
             id,
             title: title.into(),
             terminal: Terminal::new(rows.max(1) as usize, cols.max(1) as usize),
-            pty: Some(pty),
+            backend: PaneBackend::Local(pty),
             current_rect: Rect::new(0, 0, cols, rows),
         })
+    }
+
+    /// Create a new terminal pane connected to a remote daemon PTY.
+    pub fn new_daemon(
+        id: usize,
+        title: impl Into<String>,
+        pane_id: u64,
+        client: DaemonClient,
+        rows: u16,
+        cols: u16,
+    ) -> Self {
+        Self {
+            id,
+            title: title.into(),
+            terminal: Terminal::new(rows.max(1) as usize, cols.max(1) as usize),
+            backend: PaneBackend::Daemon { pane_id, client },
+            current_rect: Rect::new(0, 0, cols, rows),
+        }
+    }
+
+    /// Check if this pane is running headlessly.
+    pub fn is_headless(&self) -> bool {
+        matches!(self.backend, PaneBackend::Headless)
+    }
+
+    /// Check if this pane is backed by the daemon.
+    pub fn is_daemon(&self) -> bool {
+        matches!(self.backend, PaneBackend::Daemon { .. })
+    }
+
+    /// Check if this pane is backed by a local in-process PTY.
+    pub fn is_local(&self) -> bool {
+        matches!(self.backend, PaneBackend::Local(_))
+    }
+
+    /// Retrieve the remote daemon pane ID if daemon-backed.
+    pub fn daemon_pane_id(&self) -> Option<u64> {
+        match &self.backend {
+            PaneBackend::Daemon { pane_id, .. } => Some(*pane_id),
+            _ => None,
+        }
+    }
+
+    /// Retrieve the connected daemon client if daemon-backed.
+    pub fn daemon_client(&self) -> Option<&DaemonClient> {
+        match &self.backend {
+            PaneBackend::Daemon { client, .. } => Some(client),
+            _ => None,
+        }
+    }
+
+    /// Retrieve reference to local PTY session if local.
+    pub fn pty(&self) -> Option<&PtySession> {
+        match &self.backend {
+            PaneBackend::Local(pty) => Some(pty),
+            _ => None,
+        }
+    }
+
+    /// Retrieve mutable reference to local PTY session if local.
+    pub fn pty_mut(&mut self) -> Option<&mut PtySession> {
+        match &mut self.backend {
+            PaneBackend::Local(pty) => Some(pty),
+            _ => None,
+        }
     }
 
     /// Poll non-blocking chunks from the PTY reader and feed into VTE terminal.
     pub fn poll_pty(&mut self) -> usize {
         let mut total_bytes = 0;
-        if let Some(pty) = &mut self.pty {
+        if let PaneBackend::Local(pty) = &mut self.backend {
             while let Ok(chunk) = pty.reader_mut().try_recv() {
                 total_bytes += chunk.len();
                 self.terminal.process(&chunk);
@@ -256,22 +347,53 @@ impl Pane {
         total_bytes
     }
 
-    /// Forward raw keystroke bytes directly to the PTY master.
+    /// Forward raw keystroke bytes directly to the PTY master (local or daemon).
     pub fn write_pty(&self, data: &[u8]) {
-        if let Some(pty) = &self.pty {
-            let _ = pty.write_bytes(data);
+        match &self.backend {
+            PaneBackend::Local(pty) => {
+                let _ = pty.write_bytes(data);
+            }
+            PaneBackend::Daemon { pane_id, client } => {
+                let pid = *pane_id as usize;
+                if client.write_pane_sync(pid, data).is_err() {
+                    let client = client.clone();
+                    let bytes = data.to_vec();
+                    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                        handle.spawn(async move {
+                            let _ = client.write_pane(pid, &bytes).await;
+                        });
+                    }
+                }
+            }
+            PaneBackend::Headless => {}
         }
     }
 
-    /// Resize terminal emulator and PTY to match new screen dimensions.
+    /// Resize terminal emulator and PTY (local or daemon) to match new screen dimensions.
     pub fn resize(&mut self, new_rect: Rect) {
         if new_rect.width == 0 || new_rect.height == 0 {
             return;
         }
         if self.current_rect.width != new_rect.width || self.current_rect.height != new_rect.height {
             self.terminal.resize(new_rect.height as usize, new_rect.width as usize);
-            if let Some(pty) = &mut self.pty {
-                let _ = pty.resize(new_rect.height, new_rect.width);
+            match &mut self.backend {
+                PaneBackend::Local(pty) => {
+                    let _ = pty.resize(new_rect.height, new_rect.width);
+                }
+                PaneBackend::Daemon { pane_id, client } => {
+                    let pid = *pane_id as usize;
+                    let cols = new_rect.width;
+                    let rows = new_rect.height;
+                    if client.resize_pane_sync(pid, cols, rows).is_err() {
+                        let client = client.clone();
+                        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                            handle.spawn(async move {
+                                let _ = client.resize_pane(pid, cols, rows).await;
+                            });
+                        }
+                    }
+                }
+                PaneBackend::Headless => {}
             }
             self.current_rect = new_rect;
         }
@@ -332,8 +454,20 @@ impl PaneManager {
         self.panes.get_mut(&self.active_pane_id)
     }
 
+    pub fn get_pane(&self, id: usize) -> Option<&Pane> {
+        self.panes.get(&id)
+    }
+
     pub fn get_pane_mut(&mut self, id: usize) -> Option<&mut Pane> {
         self.panes.get_mut(&id)
+    }
+
+    pub fn all_panes(&self) -> impl Iterator<Item = &Pane> {
+        self.panes.values()
+    }
+
+    pub fn all_panes_mut(&mut self) -> impl Iterator<Item = &mut Pane> {
+        self.panes.values_mut()
     }
 
     pub fn pane_count(&self) -> usize {
@@ -395,6 +529,37 @@ impl PaneManager {
         self.tree.split_pane(self.active_pane_id, new_id, direction);
         self.active_pane_id = new_id;
         Ok(new_id)
+    }
+
+    /// Split active pane with a new remote daemon PTY pane.
+    pub fn split_active_daemon(
+        &mut self,
+        direction: SplitDirection,
+        daemon_pane_id: u64,
+        client: DaemonClient,
+    ) -> usize {
+        let new_id = self.next_pane_id;
+        self.next_pane_id += 1;
+
+        let title = format!("Daemon {}", new_id);
+        let current_rect = self
+            .panes
+            .get(&self.active_pane_id)
+            .map(|p| p.current_rect)
+            .unwrap_or(Rect::new(0, 0, 80, 24));
+
+        let new_pane = Pane::new_daemon(
+            new_id,
+            title,
+            daemon_pane_id,
+            client,
+            current_rect.height,
+            current_rect.width,
+        );
+        self.panes.insert(new_id, new_pane);
+        self.tree.split_pane(self.active_pane_id, new_id, direction);
+        self.active_pane_id = new_id;
+        new_id
     }
 
     /// Close active pane (unless it's the last remaining pane).

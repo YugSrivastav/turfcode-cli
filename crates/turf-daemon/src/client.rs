@@ -117,6 +117,16 @@ impl DaemonClient {
         Ok(response)
     }
 
+    /// Attempt to send an IPC request synchronously / non-blockingly without waiting for a response.
+    pub fn try_send_request(&self, request: DaemonRequest) -> Result<(), String> {
+        let id = NEXT_REQ_ID.fetch_add(1, Ordering::SeqCst);
+        let (tx, _rx) = oneshot::channel();
+        let msg = IpcMessage::Request { id, request };
+        self.request_tx
+            .try_send((msg, tx))
+            .map_err(|e| format!("Failed to send IPC request: {e}"))
+    }
+
     /// Query the daemon health and status (`server.status`).
     pub async fn status(&self) -> anyhow::Result<DaemonStatus> {
         match self.send_request(DaemonRequest::Status).await? {
@@ -159,6 +169,14 @@ impl DaemonClient {
         }
     }
 
+    /// Write raw byte data to a running pane PTY non-blockingly (`pane.write`).
+    pub fn write_pane_sync(&self, pane_id: usize, data: &[u8]) -> Result<(), String> {
+        self.try_send_request(DaemonRequest::WritePane {
+            pane_id,
+            data: data.to_vec(),
+        })
+    }
+
     /// Read the current terminal screen buffer text from a pane (`pane.read`).
     pub async fn read_pane(&self, pane_id: usize) -> anyhow::Result<Vec<u8>> {
         match self.send_request(DaemonRequest::ReadPane { pane_id }).await? {
@@ -180,6 +198,15 @@ impl DaemonClient {
             DaemonResponse::Success => Ok(()),
             other => anyhow::bail!("Unexpected response to resize pane: {:?}", other),
         }
+    }
+
+    /// Resize a pane non-blockingly (`pane.resize`).
+    pub fn resize_pane_sync(&self, pane_id: usize, cols: u16, rows: u16) -> Result<(), String> {
+        self.try_send_request(DaemonRequest::ResizePane {
+            pane_id,
+            cols,
+            rows,
+        })
     }
 
     /// Split a pane (`pane.split`).
@@ -205,13 +232,14 @@ impl DaemonClient {
         }
     }
 
-    /// Attach to a session (`session.attach`).
-    pub async fn attach_session(&self, id: &str) -> anyhow::Result<()> {
+    /// Attach to a session (`session.attach`). Returns active pane IDs.
+    pub async fn attach_session(&self, id: &str) -> anyhow::Result<Vec<usize>> {
         match self
             .send_request(DaemonRequest::AttachSession { id: id.to_string() })
             .await?
         {
-            DaemonResponse::SessionAttached { .. } | DaemonResponse::Success => Ok(()),
+            DaemonResponse::SessionAttached { panes, .. } => Ok(panes),
+            DaemonResponse::Success => Ok(vec![]),
             other => anyhow::bail!("Unexpected response to attach session: {:?}", other),
         }
     }
