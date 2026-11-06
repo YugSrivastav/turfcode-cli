@@ -241,9 +241,11 @@ impl std::fmt::Debug for PaneBackend {
 pub struct Pane {
     pub id: usize,
     pub title: String,
+    pub foreground_cmd: Option<String>,
     pub terminal: Terminal,
     pub backend: PaneBackend,
     pub current_rect: Rect,
+    pub last_proc_sample: Option<std::time::Instant>,
 }
 
 impl Pane {
@@ -252,22 +254,62 @@ impl Pane {
         Self {
             id,
             title: title.into(),
+            foreground_cmd: None,
             terminal: Terminal::new(rows, cols),
             backend: PaneBackend::Headless,
             current_rect: Rect::new(0, 0, cols as u16, rows as u16),
+            last_proc_sample: None,
         }
     }
 
     /// Spawn a live in-process PTY session backed terminal pane.
     pub fn spawn_shell(id: usize, title: impl Into<String>, rows: u16, cols: u16) -> Result<Self, turf_pty::PtyError> {
         let pty = PtySession::spawn(PtyOptions::new(rows.max(1), cols.max(1)))?;
-        Ok(Self {
+        let mut pane = Self {
             id,
             title: title.into(),
+            foreground_cmd: None,
             terminal: Terminal::new(rows.max(1) as usize, cols.max(1) as usize),
             backend: PaneBackend::Local(pty),
             current_rect: Rect::new(0, 0, cols, rows),
-        })
+            last_proc_sample: None,
+        };
+        pane.refresh_process_title();
+        Ok(pane)
+    }
+
+    /// Return the active display command or badge for this pane:
+    /// e.g. "vim src/main.rs" or "bash" if foreground_cmd is present,
+    /// or fallback to self.title.
+    pub fn active_cmd(&self) -> &str {
+        if let Some(cmd) = &self.foreground_cmd {
+            cmd.as_str()
+        } else {
+            &self.title
+        }
+    }
+
+    /// Return dynamic pane badge formatted as e.g. "1: bash" or "1: vim main.rs".
+    pub fn display_badge(&self) -> String {
+        format!("{}: {}", self.id, self.active_cmd())
+    }
+
+    /// Query the current foreground process running in this pane's PTY.
+    pub fn foreground_process(&self) -> Option<turf_pty::ProcessInfo> {
+        self.pty().and_then(|p| p.foreground_process())
+    }
+
+    /// Refresh pane title and foreground_cmd based on active foreground process.
+    pub fn refresh_process_title(&mut self) -> Option<String> {
+        if let Some(pty) = self.pty() {
+            if let Some(proc) = pty.foreground_process() {
+                let cmd = proc.display_cmd();
+                self.foreground_cmd = Some(cmd.clone());
+                self.title = cmd.clone();
+                return Some(cmd);
+            }
+        }
+        None
     }
 
     /// Create a new terminal pane connected to a remote daemon PTY.
@@ -282,9 +324,11 @@ impl Pane {
         Self {
             id,
             title: title.into(),
+            foreground_cmd: None,
             terminal: Terminal::new(rows.max(1) as usize, cols.max(1) as usize),
             backend: PaneBackend::Daemon { pane_id, client },
             current_rect: Rect::new(0, 0, cols, rows),
+            last_proc_sample: None,
         }
     }
 
@@ -342,6 +386,21 @@ impl Pane {
             while let Ok(chunk) = pty.reader_mut().try_recv() {
                 total_bytes += chunk.len();
                 self.terminal.process(&chunk);
+            }
+
+            // Periodic sampling of foreground process (throttle to ~150ms)
+            let now = std::time::Instant::now();
+            let should_sample = match self.last_proc_sample {
+                Some(t) => now.duration_since(t) >= std::time::Duration::from_millis(150),
+                None => true,
+            };
+            if should_sample {
+                self.last_proc_sample = Some(now);
+                if let Some(proc) = pty.foreground_process() {
+                    let cmd = proc.display_cmd();
+                    self.foreground_cmd = Some(cmd.clone());
+                    self.title = cmd;
+                }
             }
         }
         total_bytes
@@ -613,6 +672,13 @@ impl PaneManager {
         total
     }
 
+    /// Refresh process titles across all active panes with PTY sessions.
+    pub fn refresh_process_titles(&mut self) {
+        for pane in self.panes.values_mut() {
+            pane.refresh_process_title();
+        }
+    }
+
     /// Render all borderless panes and clean split dividers.
     pub fn render(&mut self, area: Rect, terminal_focused: bool, buf: &mut Buffer) {
         let (pane_rects, divider_rects) = self.tree.layout(area);
@@ -634,6 +700,28 @@ impl PaneManager {
                         cell.set_char(GLYPH_DIVIDER_H);
                         cell.set_style(Theme::divider());
                         cell.set_bg(COLOR_BG);
+                    }
+                }
+            }
+        }
+
+        // Render dynamic pane badges on horizontal dividers if multiple panes exist
+        if pane_rects.len() > 1 {
+            for (id, r) in &pane_rects {
+                if r.y > area.y {
+                    let header_y = r.y.saturating_sub(1);
+                    if let Some(pane) = self.panes.get(id) {
+                        let badge = format!(" {} ", pane.display_badge());
+                        let mut hx = r.x.saturating_add(2);
+                        for ch in badge.chars() {
+                            if hx < r.x + r.width && hx < area.x + area.width {
+                                let cell = &mut buf[(hx, header_y)];
+                                cell.set_char(ch);
+                                cell.set_style(Theme::inactive_tab());
+                                cell.set_bg(COLOR_BG);
+                                hx += 1;
+                            }
+                        }
                     }
                 }
             }

@@ -465,3 +465,99 @@ fn test_cockpit_viewport_scrolling_hotkeys_and_badge() {
     }
 }
 
+#[test]
+fn test_dynamic_tab_capsule_pill_badges() {
+    let mut buf = Buffer::empty(Rect::new(0, 0, 100, 1));
+
+    // Test 1: Active tab with vim command
+    let tabs = vec![
+        turf_tui::TabItem::new(1, "Shell")
+            .with_foreground_cmd(Some("vim src/main.rs".to_string())),
+        turf_tui::TabItem::new(2, "Build"),
+    ];
+
+    turf_tui::render_tab_strip(
+        Rect::new(0, 0, 100, 1),
+        &tabs,
+        0,
+        "TURF-7A9B",
+        "HOST",
+        "pilot",
+        &mut buf,
+    );
+
+    let mut row_str = String::new();
+    for x in 0..100 {
+        row_str.push_str(buf.cell((x, 0)).unwrap().symbol());
+    }
+    assert!(
+        row_str.contains(" 1: vim src/main.rs "),
+        "Tab strip should render dynamic active process pill ' 1: vim src/main.rs ', got: {}",
+        row_str
+    );
+    assert!(row_str.contains(" 2 "));
+
+    // Test 2: Idle shell tab pill
+    let mut buf2 = Buffer::empty(Rect::new(0, 0, 100, 1));
+    let idle_tabs = vec![
+        turf_tui::TabItem::new(1, "Shell").with_foreground_cmd(Some("bash".to_string())),
+    ];
+    turf_tui::render_tab_strip(
+        Rect::new(0, 0, 100, 1),
+        &idle_tabs,
+        0,
+        "TURF-7A9B",
+        "HOST",
+        "pilot",
+        &mut buf2,
+    );
+
+    let mut row2_str = String::new();
+    for x in 0..100 {
+        row2_str.push_str(buf2.cell((x, 0)).unwrap().symbol());
+    }
+    assert!(
+        row2_str.contains(" 1: bash "),
+        "Tab strip should render dynamic idle shell pill ' 1: bash ', got: {}",
+        row2_str
+    );
+}
+
+#[test]
+fn test_dynamic_pane_badge_and_header_rendering() {
+    let mut cockpit = TerminalCockpit::new_headless("TURF-TEST", "HOST", "tester", 30, 100);
+
+    // Set active pane foreground command
+    if let Some(tab) = cockpit.tabs.get_mut(cockpit.active_tab_index) {
+        if let Some(pane) = tab.pane_manager.active_pane_mut() {
+            pane.foreground_cmd = Some("cargo test".to_string());
+            assert_eq!(pane.display_badge(), "1: cargo test");
+        }
+
+        // Split horizontally
+        let new_id = tab.pane_manager.split_active_headless(turf_tui::SplitDirection::Horizontal);
+        if let Some(new_pane) = tab.pane_manager.get_pane_mut(new_id) {
+            new_pane.foreground_cmd = Some("git diff".to_string());
+            assert_eq!(new_pane.display_badge(), format!("{new_id}: git diff"));
+        }
+    }
+
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| cockpit.render(f.area(), f.buffer_mut())).unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let mut full_output = String::new();
+    for y in 0..30 {
+        for x in 0..100 {
+            full_output.push_str(buffer.cell((x, y)).unwrap().symbol());
+        }
+        full_output.push('\n');
+    }
+
+    // Verify pane badge is rendered in horizontal divider
+    assert!(
+        full_output.contains(" 2: git diff "),
+        "Split horizontal divider should render pane badge header"
+    );
+}

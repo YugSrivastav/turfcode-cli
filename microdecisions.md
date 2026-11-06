@@ -684,6 +684,27 @@ All crewmates, contributors, and agents MUST adhere to these invariants when mod
 - **Reason:** Enables seamless headless scripting and autonomous AI agent harnesses to drive TurfCode multiplexer sessions, inspect terminal state, and spawn detached worker sessions with zero UI overhead.
 - **Worker Invariant:** Killing a named session must reap and kill all of its associated child PTY processes. `PaneReadLines` and `PaneSendKeys` must operate via the background daemon without requiring an active TUI cockpit attachment.
 
+---
+## [MD-055] 2026-11-06: Live Foreground Process Introspection, Dynamic Tab Badges, and Asynchronous Process State Streaming
+- **Context:** Terminal tabs and pane headers previously displayed static titles (`"Shell"`, `"Shell 1"`). Users could not glance at the tab strip or multiplexer chrome to determine what commands were running in background panes (e.g. `vim main.rs`, `cargo test`, `git diff`) or distinguish idle shells (`bash`, `zsh`, `fish`). Multiplexer chrome required live process introspection and real-time state change propagation across the daemon IPC wire.
+- **The Fork:** Static window/tab naming vs. Real-time foreground process group introspection via `tcgetpgrp` and `/proc` filesystem with asynchronous IPC event streaming (`DaemonEvent::PaneStatusChanged`).
+- **Resolution:** Option B: Real-time foreground process introspection and dynamic process badges.
+  1. **PTY Foreground Process Introspection (`crates/turf-pty`):**
+     - Implemented `get_foreground_process(master_fd: RawFd) -> Option<ProcessInfo>` in `src/unix.rs`, querying the active foreground process group ID via `libc::tcgetpgrp`.
+     - Implemented `read_proc_comm(pid: i32) -> Option<String>` and `read_proc_cmdline(pid: i32) -> Option<String>` reading Linux `/proc/<pid>/comm` and `/proc/<pid>/cmdline`, with portable fallback for non-Linux / Windows.
+     - Exposed `ProcessInfo { pid: u32, name: String, cmdline: String }` in `crates/turf-pty/src/lib.rs` with `display_cmd()` extracting normalized executable basenames and arguments (e.g. `vim main.rs`, `cargo test`, `git diff`, `bash`).
+     - Exposed `foreground_process()` on both `PtyProcessHandle` and `PtySession`.
+  2. **Wire Contracts (`crates/turf-protocol`):**
+     - Added `PaneInfo { pane_id, tab_id, is_alive, foreground_cmd }` and `DaemonEvent::PaneStatusChanged { pane_id, foreground_cmd }` to `crates/turf-protocol/src/ipc.rs`.
+     - Added `DaemonRequest::PaneInfo` and `DaemonResponse::PaneInfoResult` for direct pane status queries.
+  3. **Background Daemon Sampling (`crates/turf-daemon`):**
+     - In `TurfDaemonServer`, added a periodic 150ms background sampling task that inspects active PTY handles and emits `DaemonEvent::PaneStatusChanged` whenever a pane's foreground process begins, changes, or exits.
+     - Extended `DaemonClient` with `pane_info(pane_id)` for immediate status queries.
+  4. **Dynamic Tab and Pane Chrome (`crates/turf-tui`):**
+     - Updated `TabItem` and `render_tab_strip` in `src/tabs.rs` to render dynamic process badges inside active capsule pills (` 1: vim src/main.rs `, ` 1: bash `).
+     - Updated `Pane` and `PaneManager` in `src/pane.rs` with throttled foreground process polling, dynamic `display_badge()`, and header badge rendering across split pane dividers (` 2: cargo test `).
+- **Reason:** Provides instant visual awareness of multiplexer workloads matching modern high-performance terminal multiplexers (Zellij, WezTerm, Herdr), eliminating static placeholder titles.
+- **Worker Invariant:** PTY process group queries must never block the event loop or panic on non-Linux platforms. Subprocess command parsing must sanitize leading dashes from login shells (`-bash`) and normalize executable path basenames.
 
 
 

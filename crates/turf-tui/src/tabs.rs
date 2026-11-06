@@ -16,6 +16,22 @@ use crate::theme::{
 pub struct TabItem {
     pub id: usize,
     pub title: String,
+    pub foreground_cmd: Option<String>,
+}
+
+impl TabItem {
+    pub fn new(id: usize, title: impl Into<String>) -> Self {
+        Self {
+            id,
+            title: title.into(),
+            foreground_cmd: None,
+        }
+    }
+
+    pub fn with_foreground_cmd(mut self, cmd: Option<String>) -> Self {
+        self.foreground_cmd = cmd;
+        self
+    }
 }
 
 /// Render the Herdr-grade Tab Strip into the given area.
@@ -49,8 +65,12 @@ pub fn render_tab_strip(
         }
 
         let is_active = idx == active_tab_index;
+        let display_title = tab
+            .foreground_cmd
+            .as_deref()
+            .unwrap_or(tab.title.as_str());
         let pill_text = if is_active {
-            format!(" {}: {} ", tab.id, tab.title)
+            format!(" {}: {} ", tab.id, display_title)
         } else {
             format!(" {} ", tab.id)
         };

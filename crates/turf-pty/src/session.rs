@@ -68,6 +68,25 @@ impl PtyProcessHandle {
     pub fn pid(&self) -> Option<u32> {
         self.child.process_id()
     }
+
+    /// Retrieve the master raw file descriptor on Unix, if available.
+    #[cfg(unix)]
+    pub fn master_raw_fd(&self) -> Option<std::os::unix::io::RawFd> {
+        self.master.as_raw_fd()
+    }
+
+    /// Retrieve the foreground process information for this PTY.
+    pub fn foreground_process(&self) -> Option<crate::ProcessInfo> {
+        #[cfg(unix)]
+        {
+            let fd = self.master.as_raw_fd()?;
+            crate::unix::get_foreground_process(fd)
+        }
+        #[cfg(not(unix))]
+        {
+            None
+        }
+    }
 }
 
 /// A fully managed PTY session encapsulating the master PTY, spawned child process,
@@ -242,6 +261,11 @@ impl PtySession {
     /// Child process ID.
     pub fn pid(&self) -> Option<u32> {
         self.handle.pid()
+    }
+
+    /// Retrieve the foreground process information for this PTY session.
+    pub fn foreground_process(&self) -> Option<crate::ProcessInfo> {
+        self.handle.foreground_process()
     }
 
     /// Split this session into an independent reader, writer, and process lifecycle handle.
